@@ -5,9 +5,9 @@ normal configuration, then explicitly enable workmux in the current session.
 Workspaces are enabled sessions, tabs are tmux windows, and each window gets a
 left sidebar. The remaining area contains ordinary terminal panes.
 
-Workmux reads the **running configuration**, not your config files. It does not
-track agents or install startup hooks. An optional Pi extension can send desktop
-notifications; it is installed only when explicitly requested.
+Workmux reads the **running configuration**, not your config files, and does not
+install startup hooks. The sidebar shows tmux alerts; an optional Pi integration
+adds agent-state indicators and desktop notifications when explicitly installed.
 
 ## Requirements
 
@@ -15,8 +15,9 @@ notifications; it is installed only when explicitly requested.
 - tmux 3.3 or newer.
 - The installed `workmux` command must be on tmux's `PATH`.
 
-The Python package installs its Tree-sitter dependencies automatically. Pi and a
-notification-capable terminal are needed only for the optional Pi integration.
+The Python package installs its Tree-sitter dependencies automatically. Pi is
+needed only for the optional agent integration; desktop notifications additionally
+require a compatible terminal.
 
 ## Install
 
@@ -147,25 +148,61 @@ content panes after enabling.
 
 In the sidebar, click a workspace if tmux mouse support is enabled, or focus it
 using ordinary pane navigation and use Up/Down or j/k followed by Enter. Escape/q
-returns to the remembered content pane. The `>` marker identifies the current workspace.
+returns to the remembered content pane. The `›` marker identifies the current workspace.
 Workspace selection restores the destination session's selected tab.
 
-### Exiting the last shell
+### Activity tree
 
-If the last content shell in a tab exits, the sidebar keeps the workspace alive
-and displays **No terminals in this tab** instead of an oversized workspace list.
-You can still switch workspaces or use your new-tab binding (stock prefix+c).
-No shell is respawned automatically.
+Tabs with agent activity or tmux alerts appear beneath their workspace:
 
-Creating a foreground tab from this empty view replaces the sidebar-only
-placeholder once the new terminal and sidebar are ready. A guarded tmux command
-retires only a window containing the sidebar alone; windows with live content
-are never removed by this cleanup. Detached native creation (`new-window -d`)
-keeps the current empty view and creates a background tab as requested.
+```text
+› project-a
+    ├─ ⚙ 1:build
+    └─ ⚠ 2:review
+  project-b
+    ├─ ✓ 1:changes
+    └─ ● 2:logs
+```
 
-`workmux tab new --pane ID` also recovers an empty tab when invoked from another
-terminal with the appropriate server/socket. Focus toggling in the empty view is
-a no-op, and switching to an empty workspace leaves focus on its picker.
+| Indicator | State |
+| --- | --- |
+| `⚙` | Agent working |
+| `⚠` | Agent needs attention: a blocking input dialog, error, or interruption |
+| `✓` | Agent finished its run |
+| `●` | Other tmux alert: bell, monitored activity, or silence |
+
+Click a child row to focus that tab, including tabs in other workspaces. Keyboard
+navigation with Up/Down or j/k and Enter works for both workspace and tab rows.
+Agent rows prefer the pane needing attention when a tab contains multiple agents.
+Tabs are listed in window-index order; renaming or reordering them does not break
+their click targets. Idle tabs without alerts are hidden.
+
+With several agents in one tab, pending attention takes priority over working,
+then pending finished. Attention and finished indicators classify native tmux
+alerts: clearing an alert removes the tab row unless another agent is still
+working there. Working tabs remain visible even without an alert. Native alerts
+appear when there is no applicable agent state to show, and all alert indicators
+follow tmux's normal clearing behavior.
+
+Agent states come from explicit reports, not from guessing which shell commands
+are agents. Dead agent processes are ignored when the integration supplies their
+process ID.
+
+Install the [Pi integration](#optional-pi-integration) for automatic agent reports.
+Native tmux alerts need no agent integration; their monitoring settings remain
+your responsibility.
+
+### Closing tabs and workspaces
+
+When the last content pane in a tab closes, workmux removes that tab's sidebar
+and closes the tab. Other tabs in the workspace stay open. Closing the final tab
+ends the workspace; there is no empty placeholder and no shell is respawned.
+
+This also applies when the last shell exits naturally or is closed with tmux's
+pane-kill command. Cleanup happens on the sidebar's next refresh, normally within
+400 ms. Your tmux settings still apply: `remain-on-exit` can retain a dead content
+pane, and `detach-on-destroy` controls whether a client detaches or switches to
+another session when the workspace ends.
 
 ### Optional navigation bindings
 
@@ -240,7 +277,7 @@ After detaching, remove only the demonstration server with:
 tmux -L workmux-demo kill-server
 ```
 
-## Optional Pi notifications
+## Optional Pi integration
 
 Install the bundled personal extension on the machine where Pi runs:
 
@@ -259,12 +296,40 @@ Run `/reload` in Pi after installing or uninstalling. Test with
 `/workmux-notify-test`, then switch away from your terminal within three seconds.
 Some terminals suppress desktop notifications while focused.
 
-The extension notifies when Pi opens a blocking question, confirmation, or input
-dialog and when the agent finishes all retries and queued continuations. It also
-reports errors and interruptions. A question in the final text reply triggers the
-same "Finished — ready for input" notification. This means the agent stopped,
-not necessarily that the requested task succeeded. Non-interactive/RPC runs do
-not send notifications.
+The extension reports working state at the start of a run, attention while a
+blocking agent question/confirmation/input dialog is open, and finished after all
+retries and queued continuations. Errors and interruptions report attention.
+Closing the dialog returns the agent to working state. Exiting or reloading Pi
+clears an idle agent's state; reloading during a run restores working state.
+
+Desktop notifications are also sent for blocking dialogs and completed runs.
+A question in the final text reply is still shown as "Finished — ready for input";
+the extension does not guess whether prose is a question. Finished means the
+agent stopped, not necessarily that the requested task succeeded. State reports
+and notifications are disabled in non-interactive/RPC runs.
+
+Sidebar state reporting does not require terminal notification support or tmux
+passthrough. Pi calls `workmux` on its PATH to report state in its own tmux pane;
+a missing command or reporting failure does not stop the agent.
+
+### Other agent integrations
+
+Other harnesses can report state explicitly from their tmux content pane:
+
+```sh
+workmux agent state working
+workmux agent state attention
+workmux agent state finished
+workmux agent state idle       # Clear the report
+```
+
+Use `--pane PANE_ID` for an explicit target and `--pid PID` to tie the report to
+the agent process's lifetime. Reports can be made before enabling workmux, but
+only enabled workspaces display them. Working reports show immediately; attention
+and finished reports classify pending tmux alerts, so also emit a bell or another
+monitored alert when reporting those states. The Pi integration sends a bell
+automatically. There is one report per pane; agents in separate panes are
+aggregated into their tab's indicator.
 
 ### Terminal setup
 
@@ -325,6 +390,9 @@ tmux set-environment -g PATH "$PATH"
 ```
 
 Do not remove an old Python environment while a sidebar process still uses it.
+After upgrading, existing sidebars must be restarted to use the new code: close
+only the sidebar panes, then run `workmux enable` to recreate them without
+restarting content processes.
 
 ## References
 

@@ -100,68 +100,111 @@ class TmuxIntegrationTests(unittest.TestCase):
                              "-P", "-F", "#{pane_id}")
         return self.tmux.pane(pane).session, pane
 
-    def test_last_shell_exit_shows_empty_state_and_prefix_c_replaces_placeholder(self):
+    def test_last_shell_exit_closes_enabled_workspace_and_attached_client(self):
         session, pane = self.native_session()
+        other, _ = self.native_session("other")
         self.tmux.enable(pane)
-        original_window = self.tmux.pane(pane).window
-        master, _, _ = self.attach(session)
+        _, client, _ = self.attach(session)
         self.tmux.run("send-keys", "-t", pane, "exit", "Enter")
-        eventually(lambda: len(self.tmux.panes(original_window)) == 1)
-        placeholder = self.tmux.pane(session + ":")
-        self.assertTrue(placeholder.sidebar)
-        eventually(lambda: "No terminals in this tab" in self.tmux.run("capture-pane", "-p", "-t", placeholder.id))
-        os.write(master, b"\x02c")
-        eventually(lambda: not self.tmux.pane(session + ":").sidebar)
-        eventually(lambda: self.tmux.run("list-windows", "-t", session, "-F", "#{window_id}")
-                   == self.tmux.pane(session + ":").window)
-        active = self.tmux.pane(session + ":")
-        self.assertNotEqual(active.window, original_window)
-        self.assertEqual(len(self.tmux.panes(active.window)), 2)
-        self.assertEqual(sum(item.sidebar for item in self.tmux.panes(active.window)), 1)
+        eventually(lambda: not self.tmux.workspaces())
+        client.wait(timeout=3)
+        self.assertEqual(self.tmux.run("list-sessions", "-F", "#{session_id}"), other)
 
-    def test_new_tab_helper_recovers_empty_workspace_in_its_directory(self):
-        session, content, sidebar = self.workspace()
+    def test_last_shell_exit_closes_detached_workspace(self):
+        _, content, _ = self.workspace()
+        # Keep the server alive so discovery cannot race its final-session shutdown.
+        other, _ = self.native_session("other")
         self.tmux.run("send-keys", "-t", content.id, "exit", "Enter")
-        eventually(lambda: len(self.tmux.panes(content.window)) == 1)
-        created = self.tmux.new_tab(sidebar.id, "recovered")
-        self.assertEqual(self.tmux.pane(created).directory, self.temporary.name)
-        self.assertEqual(self.tmux.pane(session + ":").id, created)
-        self.assertEqual(self.tmux.run("list-windows", "-t", session, "-F", "#{window_id}"),
-                         self.tmux.pane(created).window)
+        eventually(lambda: not self.tmux.workspaces())
+        self.assertEqual(self.tmux.run("list-sessions", "-F", "#{session_id}"), other)
 
-    def test_detached_new_tab_from_empty_workspace_preserves_current_placeholder(self):
-        session, pane = self.native_session()
-        self.tmux.run("bind-key", "v", "new-window", "-d", "-n", "background")
-        self.tmux.enable(pane)
-        original_window = self.tmux.pane(pane).window
-        master, _, _ = self.attach(session)
-        self.tmux.run("send-keys", "-t", pane, "exit", "Enter")
-        eventually(lambda: len(self.tmux.panes(original_window)) == 1)
-        placeholder = self.tmux.pane(session + ":").id
-        os.write(master, b"\x02v")
-        eventually(lambda: len(self.tmux.run("list-windows", "-t", session, "-F", "#{window_id}").splitlines()) == 2)
-        self.assertEqual(self.tmux.pane(session + ":").id, placeholder)
-        background = self.tmux.run("list-windows", "-t", session, "-f", "#{==:#{window_name},background}",
-                                   "-F", "#{window_id}")
-        eventually(lambda: len(self.tmux.panes(background)) == 2)
-        self.assertTrue(self.tmux.pane(placeholder).sidebar)
+    def test_last_content_exit_closes_only_its_tab(self):
+        session, content, _ = self.workspace()
+        other = self.tmux.new_tab(content.id, "other")
+        other_window = self.tmux.pane(other).window
+        self.tmux.run("select-window", "-t", content.window)
+        self.tmux.run("send-keys", "-t", content.id, "exit", "Enter")
+        eventually(lambda: self.tmux.run("list-windows", "-t", session, "-F", "#{window_id}") == other_window)
+        self.assertEqual(self.tmux.pane(session + ":").id, other)
+        self.assertEqual(len(self.tmux.panes(other_window)), 2)
+        self.assertEqual(sum(item.sidebar for item in self.tmux.panes(other_window)), 1)
 
-    def test_switching_to_empty_workspace_and_focus_toggle_do_not_error(self):
-        empty, pane = self.native_session("empty")
-        self.tmux.enable(pane)
-        original_window = self.tmux.pane(pane).window
-        self.tmux.run("send-keys", "-t", pane, "exit", "Enter")
-        eventually(lambda: len(self.tmux.panes(original_window)) == 1)
+    def test_background_tab_closes_without_changing_current_tab(self):
+        session, content, _ = self.workspace()
+        current = self.tmux.new_tab(content.id, "current")
+        current_window = self.tmux.pane(current).window
+        self.tmux.run("kill-pane", "-t", content.id)
+        eventually(lambda: self.tmux.run("list-windows", "-t", session, "-F", "#{window_id}") == current_window)
+        self.assertEqual(self.tmux.pane(session + ":").id, current)
+        self.assertEqual(len(self.tmux.panes(current_window)), 2)
+
+    def test_killing_final_content_pane_removes_only_its_workspace(self):
+        first, content, _ = self.workspace("first")
+        second, other, _ = self.workspace("second")
+        self.tmux.run("kill-pane", "-t", content.id)
+        eventually(lambda: [workspace.id for workspace in self.tmux.workspaces()] == [second])
+        self.assertEqual(self.tmux.pane(other.id).session, second)
+        self.assertNotIn(first, self.tmux.run("list-sessions", "-F", "#{session_id}").splitlines())
+
+    def test_only_final_content_pane_closes_tab(self):
+        session, content, sidebar = self.workspace()
+        other = self.tmux.split(content.id, "right")
+        self.tmux.run("kill-pane", "-t", content.id)
+        eventually(lambda: len(self.tmux.panes(content.window)) == 2)
+        # Exercise the cleanup guard even if its caller had a stale empty snapshot.
+        self.tmux.close_empty_window(sidebar)
+        self.assertEqual(self.tmux.pane(other).session, session)
+        self.assertTrue(self.tmux.pane(sidebar.id).sidebar)
+        native, _ = self.native_session("other")
+        self.tmux.run("kill-pane", "-t", other)
+        eventually(lambda: not self.tmux.workspaces())
+        self.assertEqual(self.tmux.run("list-sessions", "-F", "#{session_id}"), native)
+
+    def test_closing_final_tab_preserves_other_workspaces(self):
+        _, content, _ = self.workspace("first")
+        second, other, _ = self.workspace("second")
+        self.tmux.run("kill-window", "-t", content.window)
+        eventually(lambda: [workspace.id for workspace in self.tmux.workspaces()] == [second])
+        self.assertEqual(self.tmux.pane(other.id).session, second)
+
+    def test_workspace_end_honors_detach_on_destroy_and_preserves_native_session(self):
+        session, pane = self.native_session("managed")
         other, other_pane = self.native_session("other")
-        self.tmux.enable(other_pane)
-        _, _, client = self.attach(other)
-        self.tmux.select_workspace(empty, other_pane, client)
-        placeholder = self.tmux.pane(empty + ":")
-        self.assertTrue(placeholder.sidebar)
-        self.tmux.toggle_sidebar(placeholder.id)
-        self.assertTrue(self.tmux.pane(placeholder.id).active)
+        self.tmux.run("set-option", "-g", "detach-on-destroy", "off")
+        self.tmux.enable(pane)
+        _, client, client_name = self.attach(session)
+        self.tmux.run("send-keys", "-t", pane, "exit", "Enter")
+        eventually(lambda: not self.tmux.workspaces())
+        eventually(lambda: self.tmux.run("display-message", "-p", "-c", client_name, "#{session_id}") == other)
+        self.assertIsNone(client.poll())
+        self.assertEqual(self.tmux.run("show-options", "-gv", "detach-on-destroy"), "off")
+        self.assertEqual(self.tmux.pane(other_pane).session, other)
+        self.assertEqual(len(self.tmux.panes(self.tmux.pane(other_pane).window)), 1)
 
-    def test_new_tab_from_focused_sidebar_never_retires_live_content(self):
+    def test_remain_on_exit_retains_dead_content_pane_and_workspace(self):
+        session, content, sidebar = self.workspace()
+        self.tmux.run("set-option", "-w", "-t", content.window, "remain-on-exit", "on")
+        self.tmux.run("send-keys", "-t", content.id, "exit", "Enter")
+        eventually(lambda: self.tmux.run("display-message", "-p", "-t", content.id, "#{pane_dead}") == "1")
+        self.tmux.close_empty_window(sidebar)
+        self.assertEqual(self.tmux.pane(content.id).session, session)
+        self.assertEqual(len(self.tmux.panes(content.window)), 2)
+        self.assertEqual(self.tmux.run("show-options", "-wv", "-t", content.window, "remain-on-exit"), "on")
+
+    def test_cleanup_never_closes_unowned_or_content_only_window(self):
+        session, pane = self.native_session()
+        self.tmux.close_empty_window(self.tmux.pane(pane))
+        self.assertEqual(self.tmux.pane(pane).session, session)
+        # Neither ownership marker alone is enough to authorize destruction.
+        self.tmux.run("set-option", "-p", "-t", pane, "@workspace-sidebar", "1")
+        self.tmux.close_empty_window(self.tmux.pane(pane))
+        self.assertEqual(self.tmux.pane(pane).session, session)
+        self.tmux.run("set-option", "-pu", "-t", pane, "@workspace-sidebar")
+        self.tmux.run("set-option", "-t", session, "@workmux", "1")
+        self.tmux.close_empty_window(self.tmux.pane(pane))
+        self.assertEqual(self.tmux.pane(pane).session, session)
+
+    def test_new_tab_from_focused_sidebar_preserves_live_content(self):
         session, content, sidebar = self.workspace()
         self.tmux.toggle_sidebar(content.id)
         self.tmux.new_tab(sidebar.id, "next")
@@ -169,18 +212,14 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertFalse(self.tmux.pane(content.id).sidebar)
         self.assertEqual(len(self.tmux.run("list-windows", "-t", session, "-F", "#{window_id}").splitlines()), 2)
 
-    def test_reenable_empty_workspace_recovers_missing_directory_metadata(self):
+    def test_reenable_recovers_missing_directory_metadata(self):
         session, pane = self.native_session()
         self.tmux.enable(pane)
-        original_window = self.tmux.pane(pane).window
-        self.tmux.run("send-keys", "-t", pane, "exit", "Enter")
-        eventually(lambda: len(self.tmux.panes(original_window)) == 1)
-        placeholder = self.tmux.pane(session + ":")
         self.tmux.run("set-option", "-u", "-t", session, "@workspace-dir")
-        result = self.tmux.enable(placeholder.id)
+        result = self.tmux.enable(pane)
         self.assertEqual(result.sidebars_added, 0)
-        self.assertTrue(self.tmux.run("show-options", "-qv", "-t", session, "@workspace-dir"))
-        self.assertEqual(len(self.tmux.panes(original_window)), 1)
+        self.assertEqual(self.tmux.run("show-options", "-qv", "-t", session, "@workspace-dir"),
+                         self.tmux.pane(pane).directory)
 
     def test_stock_bindings_enable_without_warnings_and_keep_menus_unchanged(self):
         _, pane = self.native_session()
@@ -834,6 +873,146 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertEqual(self.tmux.run("list-windows", "-t", session, "-F", "#{window_id}"), windows)
         self.assertEqual(self.tmux.run("list-panes", "-s", "-t", session, "-F", "#{pane_id}"), panes)
         self.assertEqual(self.tmux.pane(session + ":").window, self.tmux.pane(tab).window)
+
+    def test_agent_state_is_reported_before_enable_and_rendered_as_tree(self):
+        session, pane = self.native_session()
+        self.assertEqual(main(["--socket", self.socket, "agent", "state", "working",
+                               "--pane", pane, "--pid", str(os.getpid())]), 0)
+        self.tmux.enable(pane)
+        window = self.tmux.pane(pane).window
+        current = self.tmux.new_tab(pane, "current")
+        sidebar = next(item for item in self.tmux.panes(self.tmux.pane(current).window) if item.sidebar)
+        self.attach(session)
+        for state, indicator in (("working", "⚙"), ("attention", "⚠"), ("finished", "✓")):
+            self.tmux.report_agent_state(pane, state, os.getpid())
+            if state != "working":
+                self.tmux.run("send-keys", "-t", pane, "printf '\\a'", "Enter")
+            eventually(lambda: f"─ {indicator} " in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
+            tab = next(tab for tab in self.tmux.attention_tabs() if tab.id == window)
+            self.assertEqual(tab.state, state)
+            self.assertEqual(tab.pane, pane)
+            self.assertEqual(tab.session, session)
+        self.tmux.report_agent_state(pane, "idle")
+        self.tmux.run("select-window", "-t", window)
+        eventually(lambda: "─ ✓ " not in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
+        self.assertFalse(any(tab.id == window for tab in self.tmux.attention_tabs()))
+        with self.assertRaisesRegex(WorkmuxError, "sidebar"):
+            self.tmux.report_agent_state(sidebar.id, "working")
+
+    def test_mouse_click_native_alert_row_focuses_tab_and_clears_alert(self):
+        session, content, _ = self.workspace()
+        current = self.tmux.new_tab(content.id, "current")
+        sidebar = next(item for item in self.tmux.panes(self.tmux.pane(current).window) if item.sidebar)
+        master, _, _ = self.attach(session)
+        self.tmux.run("send-keys", "-t", content.id, "printf '\\a'", "Enter")
+        eventually(lambda: any(tab.id == content.window and tab.state == "alert"
+                               for tab in self.tmux.attention_tabs()))
+        eventually(lambda: "└─ ●" in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
+        # Child of the first workspace: screen row 3, plus the status line.
+        os.write(master, b"\x1b[<0;3;5M\x1b[<0;3;5m")
+        eventually(lambda: self.tmux.pane(session + ":").id == content.id)
+        eventually(lambda: not any(tab.id == content.window for tab in self.tmux.attention_tabs()))
+
+    def test_mouse_click_agent_alert_clears_finished_and_attention_rows(self):
+        session, content, original_sidebar = self.workspace()
+        current = self.tmux.new_tab(content.id, "current")
+        window = self.tmux.pane(current).window
+        sidebar = next(item for item in self.tmux.panes(window) if item.sidebar)
+        master, _, _ = self.attach(session)
+        for state, indicator in (("attention", "⚠"), ("finished", "✓")):
+            with self.subTest(state=state):
+                self.tmux.run("select-window", "-t", window)
+                self.tmux.report_agent_state(content.id, state, os.getpid())
+                self.tmux.run("send-keys", "-t", content.id, "printf '\\a'", "Enter")
+                eventually(lambda: f"─ {indicator} " in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
+                os.write(master, b"\x1b[<0;3;5M\x1b[<0;3;5m")
+                eventually(lambda: self.tmux.pane(session + ":").id == content.id)
+                eventually(lambda: not any(tab.id == content.window for tab in self.tmux.attention_tabs()))
+                eventually(lambda: f"─ {indicator} " not in self.tmux.run("capture-pane", "-p", "-t", original_sidebar.id))
+                report = json.loads(self.tmux.run("show-options", "-pqv", "-t", content.id, "@workmux-agent"))
+                self.assertEqual(report["state"], state)  # Clearing alerts need not mutate agent reports.
+        self.tmux.report_agent_state(content.id, "working", os.getpid())
+        eventually(lambda: "─ ⚙ " in self.tmux.run("capture-pane", "-p", "-t", original_sidebar.id))
+        self.assertEqual(self.tmux.run("display-message", "-p", "-t", content.id, "#{window_bell_flag}"), "0")
+
+    def test_mouse_click_agent_row_switches_workspace_and_focuses_attention_pane(self):
+        first, _, sidebar = self.workspace("first")
+        second, original, _ = self.workspace("second")
+        working = self.tmux.new_tab(original.id, "review")
+        attention = self.tmux.split(working, "right")
+        target = self.tmux.pane(working).window
+        self.tmux.report_agent_state(working, "working", os.getpid())
+        self.tmux.report_agent_state(attention, "attention", os.getpid())
+        self.tmux.new_tab(working, "unrelated")
+        master, _, client = self.attach(first)
+        self.tmux.run("send-keys", "-t", attention, "printf '\\a'", "Enter")
+        eventually(lambda: "─ ⚠ " in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
+        # First workspace, second workspace, then its child: global terminal row 6.
+        os.write(master, b"\x1b[<0;3;6M\x1b[<0;3;6m")
+        eventually(lambda: self.tmux.run("display-message", "-p", "-c", client, "#{session_id}") == second)
+        eventually(lambda: self.tmux.pane(second + ":").id == attention)
+        self.assertEqual(self.tmux.pane(second + ":").window, target)
+        self.assertEqual(next(tab.state for tab in self.tmux.attention_tabs() if tab.id == target), "working")
+
+    def test_keyboard_navigation_selects_child_row(self):
+        first, content, sidebar = self.workspace("first")
+        second, original, _ = self.workspace("second")
+        target = self.tmux.new_tab(original.id, "build")
+        self.tmux.report_agent_state(target, "working", os.getpid())
+        self.attach(first)
+        self.tmux.toggle_sidebar(content.id)
+        eventually(lambda: "─ ⚙ " in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
+        self.tmux.run("send-keys", "-t", sidebar.id, "Down", "Down", "Enter")
+        eventually(lambda: self.tmux.pane(target).active)
+        self.assertEqual(self.tmux.pane(second + ":").id, target)
+
+    def test_agent_row_target_survives_window_rename_and_reindex(self):
+        session, original, _ = self.workspace()
+        target = self.tmux.new_tab(original.id, "before")
+        window = self.tmux.pane(target).window
+        self.tmux.report_agent_state(target, "working", os.getpid())
+        self.tmux.run("rename-window", "-t", window, "after rename")
+        self.tmux.run("move-window", "-s", window, "-t", session + ":9")
+        self.tmux.run("select-window", "-t", original.window)
+        self.attach(session)
+        self.tmux.select_tab(session, window, original.id)
+        self.assertEqual(self.tmux.pane(session + ":").id, target)
+        tab = next(tab for tab in self.tmux.attention_tabs() if tab.id == window)
+        self.assertEqual(tab.index, 9)
+        self.assertEqual(tab.name, "after rename")
+
+    def test_selecting_stale_or_wrong_workspace_tab_does_not_switch_client(self):
+        first, content, _ = self.workspace("first")
+        second, other, _ = self.workspace("second")
+        self.attach(first)
+        with self.assertRaises(WorkmuxError):
+            self.tmux.select_tab(first, other.window, content.id)
+        self.assertEqual(self.tmux.pane(first + ":").id, content.id)
+        stale = self.tmux.new_tab(other.id, "stale")
+        window = self.tmux.pane(stale).window
+        self.tmux.run("kill-window", "-t", window)
+        with self.assertRaises(WorkmuxError):
+            self.tmux.select_tab(second, window, content.id)
+        self.assertEqual(self.tmux.pane(first + ":").id, content.id)
+
+    def test_agent_process_exit_removes_stale_working_state(self):
+        _, content, _ = self.workspace()
+        process = subprocess.Popen(["sleep", "30"])
+        try:
+            self.tmux.report_agent_state(content.id, "working", process.pid)
+            self.assertTrue(any(tab.id == content.window for tab in self.tmux.attention_tabs()))
+            process.terminate()
+            process.wait(timeout=3)
+            self.assertFalse(any(tab.id == content.window for tab in self.tmux.attention_tabs()))
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
+
+    def test_tab_selection_without_attached_client_has_clear_error(self):
+        session, content, _ = self.workspace()
+        with self.assertRaisesRegex(WorkmuxError, "exactly one attached client"):
+            self.tmux.select_tab(session, content.window, content.id)
 
     def test_selection_without_attached_client_has_clear_error(self):
         session, _, sidebar = self.workspace()

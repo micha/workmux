@@ -30,7 +30,8 @@
 - `workmux/sidebar.py`: terminal rendering and workspace navigation.
 - `workmux/plugins.py`: explicit, safe installation/removal and status reporting
   for bundled agent extensions.
-- `workmux/resources/pi-notify.ts`: Pi lifecycle notifications and tmux passthrough.
+- `workmux/resources/pi-notify.ts`: Pi lifecycle state reports, notifications,
+  and tmux passthrough.
 - `workmux/cli.py`: argument parsing, socket inference, and error reporting.
 
 ## Behavioral contracts
@@ -41,6 +42,9 @@
 - Snapshot only owned bindings in tmux's memory. Recognize wrappers on re-enable
   and do not overwrite later user/plugin edits or recreate removed bindings.
 - Target sessions, windows, and panes by stable IDs, not mutable names or indexes.
+- Close tabs when only their owned sidebar remains; closing the final tab ends
+  the workspace. Recheck ownership and pane count in tmux before destruction,
+  preserve live content, and honor native lifecycle settings.
 - Legacy tmux layouts assign panes by list order, not serialized IDs. Cover
   mirrored layouts and pane identity in integration tests.
 - Quote shell and tmux configuration arguments separately. Test paths containing
@@ -52,9 +56,18 @@
   package data and any optional build tooling's source filters.
 - Plugin commands manage only their owned files. Preserve edited files, symlinks,
   unrelated extensions, and user settings. Status listing must be read-only.
-- Pi notifications use blocking UI prompt and final settlement events, not
-  low-level run-end events. Sanitize terminal payloads and emit no escape
-  sequences in non-interactive/RPC modes.
+- Agent state is explicit pane-local metadata, not inferred from command names.
+  Aggregate reports and native alerts in a batched snapshot; never resolve every
+  pane with separate subprocesses on each sidebar refresh. Ignore stale process
+  IDs and dead panes. Attention/finished states classify pending native alerts;
+  hide them when alerts are cleared, while working stays visible independently.
+  Preserve tmux's native alert monitoring/clearing behavior.
+- Tree rows and click targets use stable session/window IDs, not rendered indexes
+  or names. Prefer attention over working over finished when agents share a tab.
+- Pi state reports must be serialized and best-effort so a missing workmux command
+  or closed pane does not block the agent. Use blocking UI prompt and final
+  settlement events, not low-level run-end events. Sanitize terminal payloads;
+  neither report state nor emit escapes in non-interactive/RPC modes.
 
 ## Development and validation
 

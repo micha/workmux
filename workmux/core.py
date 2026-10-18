@@ -1,5 +1,6 @@
 """tmux operations; no terminal rendering or global mutable state."""
 
+import json
 import os
 import re
 import shlex
@@ -25,6 +26,50 @@ class Workspace:
     name: str
     label: str
     directory: str
+
+
+AGENT_STATES = ("idle", "working", "attention", "finished")
+_AGENT_PRIORITY = {"finished": 1, "working": 2, "attention": 3}
+
+
+@dataclass(frozen=True)
+class Tab:
+    session: str
+    id: str
+    index: int
+    name: str
+    state: str
+    pane: str | None = None
+
+
+def _agent_state(value: str, alive: dict[int, bool]) -> str | None:
+    try:
+        report = json.loads(value)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(report, dict):
+        return None
+    state = report.get("state")
+    if not isinstance(state, str) or state not in _AGENT_PRIORITY:
+        return None
+    pid = report.get("pid")
+    if pid is not None:
+        if type(pid) is not int or pid <= 0:
+            return None
+        if pid not in alive:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                alive[pid] = False
+            except PermissionError:
+                alive[pid] = True
+            except (OSError, OverflowError):
+                alive[pid] = False
+            else:
+                alive[pid] = True
+        if not alive[pid]:
+            return None
+    return state
 
 
 @dataclass(frozen=True)
@@ -124,6 +169,57 @@ class Tmux:
                 result.append(Workspace(*fields[:4]))
         return sorted(result, key=lambda workspace: workspace.name)
 
+    def report_agent_state(self, target: str, state: str, pid: int | None = None) -> None:
+        if state not in AGENT_STATES:
+            raise WorkmuxError(f"Unknown agent state: {state}")
+        if pid is not None and pid <= 0:
+            raise WorkmuxError("Agent PID must be positive.")
+        pane = self.pane(target)
+        if pane.sidebar:
+            raise WorkmuxError("Agent state must target a content pane, not a sidebar.")
+        # Reports can precede enable; only managed workspaces display them.
+        if state == "idle":
+            self.run("set-option", "-pu", "-t", pane.id, "@workmux-agent")
+        else:
+            report = {"state": state}
+            if pid is not None:
+                report["pid"] = pid
+            self.run("set-option", "-p", "-t", pane.id, "@workmux-agent", json.dumps(report))
+
+    def attention_tabs(self) -> list[Tab]:
+        """Aggregate agent reports and native alerts in one server-wide snapshot."""
+        output = self.run(
+            "list-panes", "-a", "-F",
+            "#{session_id}\t#{window_id}\t#{window_index}\t#{window_flags}\t#{pane_id}"
+            "\t#{@workspace-sidebar}\t#{pane_dead}\t#{@workmux-agent}\t#{window_name}",
+            missing_ok=True,
+        )
+        tabs = {}
+        alive = {}
+        for line in output.splitlines():
+            fields = line.split("\t", 8)
+            if len(fields) != 9:
+                continue
+            session, window, index, flags, pane, sidebar, dead, report, name = fields
+            try:
+                index = int(index)
+            except ValueError:
+                continue
+            key = (session, window)
+            native = "alert" if any(flag in flags for flag in "!#~") else "idle"
+            current = tabs.get(key, Tab(session, window, index, name, native))
+            state = _agent_state(report, alive) if sidebar != "1" and dead != "1" else None
+            # Passive agent states classify pending alerts, not permanent tree rows.
+            # Keep working visible independently, but hide attention/finished after
+            # tmux acknowledges the window's bell/activity/silence alert.
+            if state in ("attention", "finished") and native != "alert":
+                state = None
+            if state and _AGENT_PRIORITY[state] > _AGENT_PRIORITY.get(current.state, 0):
+                current = Tab(session, window, index, name, state, pane)
+            tabs[key] = current
+        return sorted((tab for tab in tabs.values() if tab.state != "idle"),
+                      key=lambda tab: (tab.session, tab.index))
+
     @staticmethod
     def _pane_format() -> str:
         return ("#{pane_id}\t#{session_id}\t#{window_id}\t#{@workspace-sidebar}\t#{pane_active}"
@@ -168,12 +264,16 @@ class Tmux:
             raise WorkmuxError("This window has no content pane. Create a new tab.")
         return content
 
-    def retire_empty_window(self, pane: Pane) -> None:
-        """Remove only an owned, sidebar-only placeholder once another window exists."""
-        condition = ("#{&&:#{==:#{@workspace-sidebar},1},"
-                     "#{&&:#{==:#{window_panes},1},#{!=:#{session_windows},1}}}")
-        target = shlex.quote(pane.session + ":" + pane.window)
-        self.run("if-shell", "-F", "-t", pane.id, condition, "unlink-window -k -t " + target)
+    def close_empty_window(self, pane: Pane) -> None:
+        """Close an owned sidebar-only tab, including the workspace's final tab."""
+        # Recheck in tmux's command queue: a content pane may have been added since
+        # the sidebar's snapshot. Unlink only this session's window, not other links.
+        condition = ("#{&&:#{==:#{@workmux},1},"
+                     "#{&&:#{==:#{@workspace-sidebar},1},#{==:#{window_panes},1}}}")
+        window = pane.session + ":" + pane.window
+        target = window + "." + pane.id
+        self.run("if-shell", "-F", "-t", target, condition,
+                 "unlink-window -k -t " + shlex.quote(window))
 
     def add_sidebar(self, content_id: str) -> str:
         pane = self.pane(content_id)
@@ -235,8 +335,6 @@ class Tmux:
             self.run("kill-window", "-t", self.pane(content).window)
             raise
         self.run("select-window", "-t", self.pane(content).window)
-        if pane.sidebar:
-            self.retire_empty_window(pane)
         return content
 
     def toggle_sidebar(self, target: str) -> None:
@@ -245,7 +343,7 @@ class Tmux:
         if pane.sidebar:
             content = self.content_or_none(pane)
             if content is None:
-                return  # The sidebar is the only useful focus in an empty workspace.
+                return  # The sidebar may briefly be alone while its tab is closing.
             destination = content.id
         else:
             self.run("set-option", "-w", "-t", pane.window, "@workspace-last-content", pane.id)
@@ -361,12 +459,39 @@ class Tmux:
             if content is not None:
                 self.run("select-pane", "-t", content.id)
 
+    def select_tab(self, session: str, window: str, source_pane: str, client: str | None = None) -> None:
+        self.require_workspace(session)
+        source = self.pane(source_pane)
+        self.require_workspace(source.session)
+        # A session-qualified ID rejects stale rows or a window from another workspace.
+        target = session + ":" + window
+        panes = self.panes(target)
+        if not panes or any(pane.session != session or pane.window != window for pane in panes):
+            raise WorkmuxError("This tab no longer belongs to the selected workspace.")
+        if client is None:
+            clients = self.run("list-clients", "-t", source.session, "-F", "#{client_name}").splitlines()
+            if len(clients) != 1:
+                raise WorkmuxError("Tab selection requires exactly one attached client in this session.")
+            client = clients[0]
+        preferred = next((tab.pane for tab in self.attention_tabs()
+                          if tab.session == session and tab.id == window), None)
+        # Select the destination tab before switching sessions, avoiding an unrelated
+        # tab being focused (and having its native alerts acknowledged) on the way.
+        self.run("select-window", "-t", target)
+        if source.session != session:
+            self.run("switch-client", "-c", client, "-t", session)
+        active = self.pane(target)
+        content = next((pane for pane in panes if pane.id == preferred and not pane.sidebar), None)
+        content = content or self.content_or_none(active)
+        if content is not None:
+            self.run("select-pane", "-t", content.id)
+
     def repair_width(self, target: str) -> None:
         pane = self.pane(target)
         if pane.sidebar and not pane.zoomed:
             count = self.run("display-message", "-p", "-t", pane.id, "#{window_panes}")
             if count == "1":
-                return  # A sole pane must fill the window; the TUI draws an empty-state view.
+                return  # Empty tabs are closed by the sidebar; never resize a sole pane.
             desired = sidebar_width(pane.window_width)
             if pane.width != desired:
                 self.run("resize-pane", "-t", pane.id, "-x", str(desired))

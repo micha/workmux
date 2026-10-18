@@ -252,8 +252,6 @@ class Integration:
                 args = ["-c", workspace.directory or pane.directory, *args]
             created = self.tmux.run("new-window", "-t", pane.session + ":", "-P", "-F", "#{pane_id}", *args)
             self.tmux.add_sidebar(created)
-            if pane.sidebar and "d" not in flags:
-                self.tmux.retire_empty_window(pane)
         elif binding.command == "split-window":
             created = self.tmux.run("split-window", "-t", content.id, "-P", "-F", "#{pane_id}", *args)
             if "d" not in flags:

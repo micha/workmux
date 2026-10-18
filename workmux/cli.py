@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from .core import Tmux, WorkmuxError
+from .core import AGENT_STATES, Tmux, WorkmuxError
 from .layouts import LAYOUTS
 
 
@@ -64,6 +64,13 @@ def parser() -> argparse.ArgumentParser:
     sidebars = sidebar.add_subparsers(dest="action", required=True)
     for action in ("run", "toggle-focus"):
         add_pane(sidebars.add_parser(action))
+
+    agent = commands.add_parser("agent", help="Report an agent's state for sidebar tab indicators")
+    agents = agent.add_subparsers(dest="action", required=True)
+    state = agents.add_parser("state", help="Set or clear the agent state of a content pane")
+    state.add_argument("state", choices=AGENT_STATES)
+    state.add_argument("--pid", type=int, help="Agent process ID; ignore stale reports after it exits")
+    add_pane(state)
 
     enable = commands.add_parser("enable", help="Enable or reconcile workmux in an existing tmux session")
     enable.add_argument("--client", help="Invoking client; validates the source session when supplied")
@@ -126,6 +133,8 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 for warning in result.warnings:
                     print(f"workmux: {warning}", file=sys.stderr)
+        elif args.command == "agent":
+            tmux.report_agent_state(require_pane(args), args.state, args.pid)
         elif args.command == "dispatch":
             tmux.dispatch(args.binding, require_pane(args))
         elif args.command == "workspace":
