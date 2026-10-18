@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "workmux"
+version = "0.2.2"
+description = "Workspace sidebar and content-only tiling for tmux"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "tree-sitter>=0.24,<0.27",
+  "tree-sitter-tmux==0.1.5",
+]
+
+[project.scripts]
+workmux = "workmux.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["workmux", "workmux.*"]
