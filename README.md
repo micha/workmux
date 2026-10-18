@@ -47,9 +47,11 @@ only workmux in the selected Nix profile and rolls back a failed replacement.
 ./reinstall-local.sh --profile /tmp/workmux-test-profile
 ```
 
-The script is machine-local and is not distributed with the repository. Choose
-pipx or the Nix profile installation; installing both can cause PATH shadowing.
-The grammar's Nix derivation is defined in `nix/python-deps.nix`.
+The script is machine-local and is not distributed with the repository. Its build
+expression delegates to the tracked `nix/workmux.nix`, which includes bundled Pi
+resources and tests install/uninstall in a temporary agent directory. Choose pipx
+or the Nix profile installation; installing both can cause PATH shadowing. The
+grammar's Nix derivation is defined in `nix/python-deps.nix`.
 
 ## Optional Pi notifications
 
@@ -140,6 +142,21 @@ of opening a command-output view for warnings. Run `workmux enable` in a shell
 for detailed warnings. Choose another activation key if W is already in use.
 
 This binding is not installed automatically, and no attachment hook is added.
+
+### Optional automatic activation
+
+To enable workmux whenever tmux creates a session, add this to your own tmux config:
+
+```tmux
+set-hook -g after-new-session[90] 'run-shell -b "workmux --socket \"#{socket_path}\" enable --pane \"#{pane_id}\""'
+```
+
+This covers the first session when the server starts and later new sessions.
+The indexed hook preserves other entries; choose another index if `90` is in use.
+Reload your config with `tmux source-file ~/.tmux.conf`, then run `workmux enable`
+for the current session. Loading the hook does not activate existing sessions.
+Workmux must be on the server's PATH. If plugins replace bindings asynchronously,
+re-enable after they finish. The hook is opt-in and is never installed by workmux.
 
 ### After reloading your tmux config
 
