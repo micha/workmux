@@ -12,98 +12,26 @@ notifications; it is installed only when explicitly requested.
 ## Requirements
 
 - Python 3.10 or newer, with `curses`.
-- tmux 3.3 or newer. Tests currently run against tmux 3.6a on Linux;
-  macOS/Ghostty validation is still needed.
+- tmux 3.3 or newer.
 - The installed `workmux` command must be on tmux's `PATH`.
 
-Python dependencies are Tree-sitter and its tmux grammar. They parse tmux's
-normalized `list-keys` output, not the original `tmux.conf`.
+The Python package installs its Tree-sitter dependencies automatically. Pi and a
+notification-capable terminal are needed only for the optional Pi integration.
 
 ## Install
 
-Install from this checkout with [pipx](https://pipx.pypa.io/):
+Install from a local clone with [pipx](https://pipx.pypa.io/). From the repository
+root, run:
 
 ```sh
-cd /work/repos/micha/workmux
 pipx install .
-# After source changes:
-pipx install --force /work/repos/micha/workmux
+# To reinstall after updating the source:
+pipx install --force .
 ```
 
-This project is not published to PyPI; use the checkout path. pipx installs the
-Python dependencies, but tmux must already be installed separately. Ensure pipx's
-application bin directory is on your `PATH`.
-
-### Local Nix reinstall
-
-On this workstation, the executable, gitignored `reinstall-local.sh` builds the
-application with Python dependencies and tmux on its runtime `PATH`. It replaces
-only workmux in the selected Nix profile and rolls back a failed replacement.
-
-```sh
-./reinstall-local.sh
-# Build without installing, or test a separate profile:
-./reinstall-local.sh --build-only
-./reinstall-local.sh --profile /tmp/workmux-test-profile
-```
-
-The script is machine-local and is not distributed with the repository. Its build
-expression delegates to the tracked `nix/workmux.nix`, which includes bundled Pi
-resources and tests install/uninstall in a temporary agent directory. Choose pipx
-or the Nix profile installation; installing both can cause PATH shadowing. The
-grammar's Nix derivation is defined in `nix/python-deps.nix`.
-
-## Optional Pi notifications
-
-Install the bundled personal extension on the machine where Pi runs:
-
-```sh
-workmux install       # List supported harnesses and installation status
-workmux install pi
-# Later, to remove it:
-workmux uninstall pi
-```
-
-The listing is read-only and reports the managed extension's on-disk status,
-including conflicts and available updates. It does not detect whether Pi itself
-is installed or whether the extension is enabled in a running session.
-
-Run `/reload` in Pi after either command. Test with `/workmux-notify-test`, then
-switch away from Ghostty within three seconds; Ghostty may suppress desktop
-notifications while focused.
-
-The extension notifies when Pi opens a blocking question/confirmation/input dialog
-and when the agent settles after all retries and queued continuations. It also
-reports errors and interruptions. A question in the final text reply triggers the
-same "Finished — ready for input" notification. A settled run is not proof that
-the requested task succeeded. Non-interactive/RPC runs emit no terminal escapes.
-
-Notifications use OSC 9, with tmux passthrough when running inside tmux, plus a
-separate bell for tmux's status-bar alert. For Ghostty over SSH, enable local OS
-notification permissions and Ghostty's `desktop-notifications` setting (enabled
-by default). In the remote tmux server, enable passthrough yourself:
-
-```tmux
-set -g allow-passthrough all
-```
-
-`on` allows visible panes only; `all` also allows hidden panes. Passthrough permits
-applications to send terminal controls directly, not only notifications, so use it
-only with trusted workloads. tmux bell alerts require `monitor-bell on`. Desktop
-notifications require an attached terminal; nested tmux is not supported by this
-extension. These commands do not change tmux options or configuration.
-
-The commands manage only `extensions/workmux-notify.ts` under `~/.pi/agent`, or
-`PI_CODING_AGENT_DIR` when set. Use `--agent-dir PATH` to override that location.
-They do not modify Pi settings, project extensions, or other extensions.
-Installation is idempotent and updates intact older workmux copies. Both commands
-refuse symlinks and files whose workmux checksum is missing or no longer matches;
-move an edited/conflicting file aside manually first. Uninstalling a missing
-extension is a no-op.
-
-If you already use the earlier standalone `desktop-notify.ts`, remove that copy
-manually when switching to this integration to avoid duplicate notifications.
-The installer deliberately leaves it untouched.
+This project is not published to PyPI; use the local repository path. pipx installs
+the Python dependencies, but tmux must already be installed separately. Ensure
+pipx's application bin directory is on your `PATH`.
 
 ## Enable in your existing tmux session
 
@@ -172,13 +100,12 @@ wrapped again. Updated native bindings become the new fallback/original commands
 Unsupported replacements remain untouched, rather than being overwritten with a
 stale snapshot. If you unbind a key, re-enabling does not recreate it.
 
-Keep the activation binding in your config so reloading does not remove it.
-Version 0.2 removes the old `workmux config` and `workmux configure` commands;
-there is no generated config to merge or reload.
+Workmux does not generate or reload tmux configuration; reload your own config
+normally, then re-enable.
 
 ### Which bindings are adapted?
 
-The initial implementation supports **single, direct command bodies**:
+Workmux supports **single, direct command bodies**:
 
 | Native command | Supported arguments |
 | --- | --- |
@@ -313,6 +240,67 @@ After detaching, remove only the demonstration server with:
 tmux -L workmux-demo kill-server
 ```
 
+## Optional Pi notifications
+
+Install the bundled personal extension on the machine where Pi runs:
+
+```sh
+workmux install       # List supported harnesses and installation status
+workmux install pi
+# Later, to remove it:
+workmux uninstall pi
+```
+
+The listing is read-only and reports the managed extension's on-disk status,
+including conflicts and available updates. It does not detect whether Pi itself
+is installed or whether the extension is enabled in a running session.
+
+Run `/reload` in Pi after installing or uninstalling. Test with
+`/workmux-notify-test`, then switch away from your terminal within three seconds.
+Some terminals suppress desktop notifications while focused.
+
+The extension notifies when Pi opens a blocking question, confirmation, or input
+dialog and when the agent finishes all retries and queued continuations. It also
+reports errors and interruptions. A question in the final text reply triggers the
+same "Finished — ready for input" notification. This means the agent stopped,
+not necessarily that the requested task succeeded. Non-interactive/RPC runs do
+not send notifications.
+
+### Terminal setup
+
+Desktop notifications require a terminal that supports **OSC 9 notifications**.
+Enable notifications in that terminal's settings and allow them in your desktop's
+notification settings. The extension also sends a separate bell for tmux's
+status-bar alert, which requires `monitor-bell on`.
+
+Inside tmux, enable notification passthrough yourself:
+
+```tmux
+set -g allow-passthrough all
+```
+
+`on` allows visible panes only; `all` also allows hidden panes. Passthrough permits
+applications to send terminal controls directly, not only notifications, so use it
+only with trusted workloads. Workmux does not change these settings for you.
+
+Over SSH, configure passthrough on the machine running tmux and notification
+permissions on your local desktop. Notifications travel through the terminal
+connection; no desktop forwarding is needed. A terminal must remain attached;
+nested tmux is not supported by this extension.
+
+### Installation safety
+
+The commands manage only `extensions/workmux-notify.ts` under `~/.pi/agent`, or
+`PI_CODING_AGENT_DIR` when set. Use `--agent-dir PATH` to override that location.
+They do not modify Pi settings, project extensions, or other extensions.
+Installation is idempotent and updates intact older workmux copies. Both commands
+refuse symlinks and files whose workmux checksum is missing or no longer matches;
+move an edited/conflicting file aside manually first. Uninstalling a missing
+extension is a no-op.
+
+If another Pi extension already sends notifications, disable it before enabling
+this one to avoid duplicates. Workmux deliberately leaves other extensions alone.
+
 ## Runtime and layout limits
 
 - Sidebars are replicated per window and poll every 400 ms.
@@ -338,39 +326,9 @@ tmux set-environment -g PATH "$PATH"
 
 Do not remove an old Python environment while a sidebar process still uses it.
 
-## Develop and test
+## References
 
-Use the project-local Nix environment for dependencies and run from the checkout:
-
-```sh
-nix-shell
-./bin/workmux --help
-./scripts/check.sh
-```
-
-The checkout launcher puts `bin` on its PATH so new test servers use source code,
-not an older installation. Tests use temporary private sockets, clean up servers,
-and exercise real pseudoterminal clients. They never alter your running server,
-user config, or profile.
-
-Test the installed package from outside the checkout in an isolated pipx environment:
-
-```sh
-nix shell nixpkgs#pipx --command ./scripts/check-install.sh
-```
-
-## Implementation
-
-- `workmux/bindings.py`: Tree-sitter parsing, supported-operation validation, guarded wrappers.
-- `workmux/integration.py`: activation, ownership/reconciliation state, native-operation dispatch.
-- `workmux/core.py`: server operations, sidebar/layout helpers, internal isolated-server defaults.
-- `workmux/layouts.py`: pure geometry and portable tmux layout serialization.
-- `workmux/sidebar.py`: curses workspace picker.
-- `workmux/plugins.py`: safe, explicit installation/removal of bundled agent extensions.
-- `workmux/resources/pi-notify.ts`: Pi lifecycle notifications and tmux passthrough.
-- `workmux/cli.py`: argument parsing, socket inference, error reporting.
-
-This README owns workflows and limitations; command help owns argument syntax.
-See the [tmux manual](https://man.openbsd.org/tmux),
-[tmux hooks documentation](https://github.com/tmux/tmux/wiki/Events), and
-[tmux Tree-sitter grammar](https://github.com/Freed-Wu/tree-sitter-tmux) for underlying behavior.
+See the [tmux manual](https://man.openbsd.org/tmux) and
+[tmux hooks documentation](https://github.com/tmux/tmux/wiki/Events) for tmux
+configuration details. Run `workmux --help` or a subcommand's help for command
+syntax.
