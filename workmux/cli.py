@@ -23,6 +23,13 @@ def parser() -> argparse.ArgumentParser:
     selector.add_argument("--socket", help="Explicit tmux socket path")
     commands = result.add_subparsers(dest="command", required=True)
 
+    for action, description in (("install", "List supported harnesses or install an agent plugin"),
+                                ("uninstall", "Remove an intact workmux agent plugin")):
+        plugin = commands.add_parser(action, help=description)
+        plugin.add_argument("plugin", choices=("pi",), nargs="?" if action == "install" else None,
+                            help="Agent integration to manage (omit for install to list status)")
+        plugin.add_argument("--agent-dir", help="Pi personal directory (default: PI_CODING_AGENT_DIR or ~/.pi/agent)")
+
     workspace = commands.add_parser("workspace", help="Create and list workspaces")
     actions = workspace.add_subparsers(dest="action", required=True)
     new = actions.add_parser("new", help="Create a workspace with one tab and sidebar")
@@ -95,11 +102,20 @@ def attach(tmux: Tmux, session: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
-    socket = args.socket
-    if not socket and not args.server and os.environ.get("TMUX"):
-        socket = os.environ["TMUX"].rsplit(",", 2)[0]
-    tmux = Tmux(server=args.server or "workmux", socket=socket)
     try:
+        if args.command in ("install", "uninstall"):
+            from .plugins import install_pi, pi_status, uninstall_pi
+            if args.command == "install" and args.plugin is None:
+                status, path = pi_status(args.agent_dir)
+                print(f"Supported harnesses:\n  pi\t{status}\t{path}")
+                return 0
+            operation = install_pi if args.command == "install" else uninstall_pi
+            print(operation(args.agent_dir))
+            return 0
+        socket = args.socket
+        if not socket and not args.server and os.environ.get("TMUX"):
+            socket = os.environ["TMUX"].rsplit(",", 2)[0]
+        tmux = Tmux(server=args.server or "workmux", socket=socket)
         if args.command == "enable":
             result = tmux.enable(require_pane(args), args.client)
             if args.client:

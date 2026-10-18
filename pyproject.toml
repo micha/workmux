@@ -19,3 +19,6 @@ workmux = "workmux.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["workmux", "workmux.*"]
+
+[tool.setuptools.package-data]
+workmux = ["resources/*.ts"]

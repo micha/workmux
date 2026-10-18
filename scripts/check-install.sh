@@ -22,4 +22,12 @@ python="$PIPX_HOME/venvs/workmux/bin/python"
 path = Path(workmux.__file__).resolve()
 assert Path(sys.prefix).resolve() in path.parents, f"Not using installed package: {path}"
 print(f"Testing installed package: {path}")'
+# Exercise plugin resources through the installed console script, outside checkout.
+PI_CODING_AGENT_DIR="$root/pi-agent" "$PIPX_BIN_DIR/workmux" install | grep -F 'not installed'
+test ! -e "$root/pi-agent"
+PI_CODING_AGENT_DIR="$root/pi-agent" "$PIPX_BIN_DIR/workmux" install pi
+test -f "$root/pi-agent/extensions/workmux-notify.ts"
+PI_CODING_AGENT_DIR="$root/pi-agent" "$PIPX_BIN_DIR/workmux" install | grep -F 'installed'
+PI_CODING_AGENT_DIR="$root/pi-agent" "$PIPX_BIN_DIR/workmux" uninstall pi
+test ! -e "$root/pi-agent/extensions/workmux-notify.ts"
 "$python" -m unittest discover -s "$project_dir/tests" -v

@@ -6,7 +6,8 @@ Workspaces are enabled sessions, tabs are tmux windows, and each window gets a
 left sidebar. The remaining area contains ordinary terminal panes.
 
 Workmux reads the **running configuration**, not your config files. It does not
-track agents, send notifications, or install startup hooks.
+track agents or install startup hooks. An optional Pi extension can send desktop
+notifications; it is installed only when explicitly requested.
 
 ## Requirements
 
@@ -49,6 +50,58 @@ only workmux in the selected Nix profile and rolls back a failed replacement.
 The script is machine-local and is not distributed with the repository. Choose
 pipx or the Nix profile installation; installing both can cause PATH shadowing.
 The grammar's Nix derivation is defined in `nix/python-deps.nix`.
+
+## Optional Pi notifications
+
+Install the bundled personal extension on the machine where Pi runs:
+
+```sh
+workmux install       # List supported harnesses and installation status
+workmux install pi
+# Later, to remove it:
+workmux uninstall pi
+```
+
+The listing is read-only and reports the managed extension's on-disk status,
+including conflicts and available updates. It does not detect whether Pi itself
+is installed or whether the extension is enabled in a running session.
+
+Run `/reload` in Pi after either command. Test with `/workmux-notify-test`, then
+switch away from Ghostty within three seconds; Ghostty may suppress desktop
+notifications while focused.
+
+The extension notifies when Pi opens a blocking question/confirmation/input dialog
+and when the agent settles after all retries and queued continuations. It also
+reports errors and interruptions. A question in the final text reply triggers the
+same "Finished — ready for input" notification. A settled run is not proof that
+the requested task succeeded. Non-interactive/RPC runs emit no terminal escapes.
+
+Notifications use OSC 9, with tmux passthrough when running inside tmux, plus a
+separate bell for tmux's status-bar alert. For Ghostty over SSH, enable local OS
+notification permissions and Ghostty's `desktop-notifications` setting (enabled
+by default). In the remote tmux server, enable passthrough yourself:
+
+```tmux
+set -g allow-passthrough all
+```
+
+`on` allows visible panes only; `all` also allows hidden panes. Passthrough permits
+applications to send terminal controls directly, not only notifications, so use it
+only with trusted workloads. tmux bell alerts require `monitor-bell on`. Desktop
+notifications require an attached terminal; nested tmux is not supported by this
+extension. These commands do not change tmux options or configuration.
+
+The commands manage only `extensions/workmux-notify.ts` under `~/.pi/agent`, or
+`PI_CODING_AGENT_DIR` when set. Use `--agent-dir PATH` to override that location.
+They do not modify Pi settings, project extensions, or other extensions.
+Installation is idempotent and updates intact older workmux copies. Both commands
+refuse symlinks and files whose workmux checksum is missing or no longer matches;
+move an edited/conflicting file aside manually first. Uninstalling a missing
+extension is a no-op.
+
+If you already use the earlier standalone `desktop-notify.ts`, remove that copy
+manually when switching to this integration to avoid duplicate notifications.
+The installer deliberately leaves it untouched.
 
 ## Enable in your existing tmux session
 
@@ -296,6 +349,8 @@ nix shell nixpkgs#pipx --command ./scripts/check-install.sh
 - `workmux/core.py`: server operations, sidebar/layout helpers, internal isolated-server defaults.
 - `workmux/layouts.py`: pure geometry and portable tmux layout serialization.
 - `workmux/sidebar.py`: curses workspace picker.
+- `workmux/plugins.py`: safe, explicit installation/removal of bundled agent extensions.
+- `workmux/resources/pi-notify.ts`: Pi lifecycle notifications and tmux passthrough.
 - `workmux/cli.py`: argument parsing, socket inference, error reporting.
 
 This README owns workflows and limitations; command help owns argument syntax.
