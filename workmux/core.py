@@ -302,7 +302,7 @@ class Tmux:
         numbers = [int(prefix) for prefix in prefixes if prefix.isascii() and prefix.isdigit()]
         name = f"{max(numbers, default=0) + 1:06d}-{label}"
         # Keep the bootstrap window large enough even when no client is attached.
-        content = self.run("new-session", "-d", "-s", name, "-n", "terminal", "-c", directory,
+        content = self.run("new-session", "-d", "-s", name, "-c", directory,
                            "-x", "120", "-y", "40", "-P", "-F", "#{pane_id}")
         session = self.pane(content).session
         try:

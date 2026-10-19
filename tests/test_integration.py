@@ -514,6 +514,22 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertEqual(len(self.tmux.panes(self.tmux.pane(pane).window)), 1)
         self.assertEqual(self.tmux.run("show-options", "-qv", "-t", session, "@workmux-enabled"), "")
 
+    def test_workspace_initial_tab_uses_automatic_shell_name(self):
+        session = self.tmux.new_workspace("new", self.temporary.name)
+        content = self.tmux.content(self.tmux.pane(session + ":"))
+        self.assertEqual(self.tmux.run("show-options", "-gwv", "automatic-rename"), "on")
+        self.assertEqual(
+            self.tmux.run("show-options", "-wv", "-t", content.window, "automatic-rename"),
+            "",
+        )
+        command = self.tmux.run("display-message", "-p", "-t", content.id, "#{pane_current_command}")
+        eventually(
+            lambda: self.tmux.run(
+                "display-message", "-p", "-t", content.window, "#{window_name}"
+            ) == command,
+            "initial tab was not automatically named after its shell",
+        )
+
     def test_workspace_creation_in_existing_server_does_not_apply_isolated_defaults(self):
         original, _ = self.native_session()
         self.tmux.run("set-option", "-g", "prefix", "C-a")
