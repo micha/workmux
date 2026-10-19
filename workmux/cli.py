@@ -39,7 +39,7 @@ def parser() -> argparse.ArgumentParser:
     listing = actions.add_parser("list", help="List managed workspaces in sidebar order")
     listing.add_argument("--json", action="store_true")
     select = actions.add_parser("select", help="Select a workspace for an attached client")
-    select.add_argument("target", help="Workspace ID, numbered session name, or display label")
+    select.add_argument("target", help="Workspace ID, session name, or display label")
     select.add_argument("--client")
     add_pane(select)
 

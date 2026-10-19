@@ -853,20 +853,6 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertEqual(self.tmux.pane(session + ":").directory, str(directory))
         self.assertEqual(self.tmux.workspaces()[0].directory, str(directory))
 
-    def test_native_next_previous_follow_name_order_after_rename(self):
-        first, _, _ = self.workspace("first")
-        second, _, _ = self.workspace("second")
-        third, _, _ = self.workspace("third")
-        _, _, client = self.attach(first)
-        # Demonstrate the proposed future reordering mechanism, without adding UI.
-        self.tmux.run("rename-session", "-t", third, "aardvark")
-        self.tmux.run("switch-client", "-c", client, "-n")
-        eventually(lambda: self.client_session(client) == second)
-        self.tmux.run("switch-client", "-c", client, "-n")
-        eventually(lambda: self.client_session(client) == third)
-        self.tmux.run("switch-client", "-c", client, "-p")
-        eventually(lambda: self.client_session(client) == second)
-
     def test_real_prefix_bindings_and_picker_switch_workspaces(self):
         first, content, sidebar = self.workspace("first")
         second, _, _ = self.workspace("second")

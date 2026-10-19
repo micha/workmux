@@ -101,9 +101,9 @@ class InputTests(unittest.TestCase):
 
     def test_workspace_resolution_by_id_name_or_label(self):
         with patch.object(Tmux, "workspaces", return_value=[
-            Workspace("$4", "000001-demo", "demo", "/tmp"),
+            Workspace("$4", "demo-session", "demo", "/tmp"),
         ]):
-            for target in (None, "$4", "000001-demo", "demo"):
+            for target in (None, "$4", "demo-session", "demo"):
                 self.assertEqual(resolve_workspace(Tmux(), target), "$4")
             with self.assertRaises(WorkmuxError):
                 resolve_workspace(Tmux(), "missing")
