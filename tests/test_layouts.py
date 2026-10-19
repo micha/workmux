@@ -27,8 +27,10 @@ class LayoutTests(unittest.TestCase):
 
     def test_legacy_layout_round_trips_every_preset(self):
         for preset in LAYOUTS:
-            layout = workspace_layout(preset, "%9", ["%1", "%2", "%3"], 120, 40, 24)
-            self.assertEqual(parse_layout(layout.dump()), layout)
+            for sidebar in (24, 36):
+                with self.subTest(preset=preset, sidebar=sidebar):
+                    layout = workspace_layout(preset, "%9", ["%1", "%2", "%3"], 120, 40, sidebar)
+                    self.assertEqual(parse_layout(layout.dump()), layout)
 
     def test_json_v2_geometry_uses_stable_pane_ids_not_indexes(self):
         layout = workspace_layout("even-horizontal", "%9", ["%4"], 120, 40, 24)
@@ -92,13 +94,14 @@ class LayoutTests(unittest.TestCase):
         for preset in LAYOUTS:
             for count in range(1, 10):
                 for width, height in ((120, 40), (161, 53)):
-                    with self.subTest(preset=preset, count=count, size=(width, height)):
-                        panes = [f"%{index}" for index in range(count)]
-                        layout = workspace_layout(preset, "%99", panes, width, height, 24)
-                        self.assert_partition(layout)
-                        self.assertEqual(layout.children[0], Cell(24, height, 0, 0, "%99"))
-                        self.assertCountEqual(layout.pane_ids(), ["%99", *panes])
-                        self.assertEqual(layout.children[1].x, 25)
+                    for sidebar in (24, 36):
+                        with self.subTest(preset=preset, count=count, size=(width, height), sidebar=sidebar):
+                            panes = [f"%{index}" for index in range(count)]
+                            layout = workspace_layout(preset, "%99", panes, width, height, sidebar)
+                            self.assert_partition(layout)
+                            self.assertEqual(layout.children[0], Cell(sidebar, height, 0, 0, "%99"))
+                            self.assertCountEqual(layout.pane_ids(), ["%99", *panes])
+                            self.assertEqual(layout.children[1].x, sidebar + 1)
 
     def test_mirrored_main_pane_is_last_in_traversal_but_keeps_identity(self):
         for preset in ("main-horizontal-mirrored", "main-vertical-mirrored"):

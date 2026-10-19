@@ -239,7 +239,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         master, _, _ = self.attach(session)
         self.tmux.run("resize-pane", "-t", pane, "-x", "20")
         os.write(master, b"\x02E")
-        eventually(lambda: self.tmux.pane(pane).width == 47)
+        eventually(lambda: self.tmux.pane(pane).width == 41)
         window = self.tmux.pane(pane).window
         sidebar = next(item.id for item in self.tmux.panes(window) if item.sidebar)
         self.assert_sidebar_layout(window, sidebar, [item.id for item in self.tmux.panes(window)])
@@ -275,15 +275,15 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.balance(sidebar.id)
         self.assertTrue(self.tmux.pane(sidebar.id).active)
         self.assertFalse(self.tmux.pane(sidebar.id).zoomed)
-        self.assertEqual(self.tmux.pane(sidebar.id).width, 24)
-        self.assertEqual(self.tmux.pane(content.id).width, 47)
+        self.assertEqual(self.tmux.pane(sidebar.id).width, 36)
+        self.assertEqual(self.tmux.pane(content.id).width, 41)
 
     def test_balancing_single_content_pane_does_not_spread_sidebar_and_content(self):
         _, content, sidebar = self.workspace()
         self.tmux.balance(content.id)
         self.tmux.balance(content.id)
-        self.assertEqual(self.tmux.pane(sidebar.id).width, 24)
-        self.assertEqual(self.tmux.pane(content.id).width, 95)
+        self.assertEqual(self.tmux.pane(sidebar.id).width, 36)
+        self.assertEqual(self.tmux.pane(content.id).width, 83)
 
     def test_balancing_honors_top_and_bottom_pane_border_status(self):
         for status in ("top", "bottom"):
@@ -297,7 +297,7 @@ class TmuxIntegrationTests(unittest.TestCase):
             second_height = int(self.tmux.run("display-message", "-p", "-t", other, "#{pane_height}"))
             self.assertLessEqual(abs(first_height - second_height), 1)
             sidebar = next(item for item in self.tmux.panes(self.tmux.pane(pane).window) if item.sidebar)
-            self.assertEqual(sidebar.width, 24)
+            self.assertEqual(sidebar.width, 36)
 
     def test_unsupported_scrollbar_balancing_does_not_modify_layout(self):
         _, content, _ = self.workspace()
@@ -578,10 +578,10 @@ class TmuxIntegrationTests(unittest.TestCase):
         geometry = {fields[0]: list(map(int, fields[1:])) for fields in map(str.split, rows)}
         self.assertCountEqual(geometry, pane_ids)
         height = int(self.tmux.run("display-message", "-p", "-t", window, "#{window_height}"))
-        self.assertEqual(geometry[sidebar], [0, 0, 24, height, 0])
+        self.assertEqual(geometry[sidebar], [0, 0, 36, height, 0])
         for pane_id, (x, y, width, pane_height, mode) in geometry.items():
             if pane_id != sidebar:
-                self.assertGreaterEqual(x, 25)
+                self.assertGreaterEqual(x, 37)
                 self.assertGreaterEqual(y, 0)
                 self.assertLessEqual(y + pane_height, height)
                 self.assertGreaterEqual(width, 2)
@@ -601,13 +601,13 @@ class TmuxIntegrationTests(unittest.TestCase):
                 if preset == "even-horizontal":
                     self.assertEqual({geometry[item][1] for item in (content.id, right, bottom)}, {0})
                 elif preset == "even-vertical":
-                    self.assertEqual({geometry[item][0] for item in (content.id, right, bottom)}, {25})
+                    self.assertEqual({geometry[item][0] for item in (content.id, right, bottom)}, {37})
                 elif preset.startswith("main-horizontal"):
-                    self.assertEqual(geometry[content.id][2:4], [95, 24])
+                    self.assertEqual(geometry[content.id][2:4], [83, 24])
                     self.assertEqual(geometry[content.id][1], 16 if preset.endswith("mirrored") else 0)
                 elif preset.startswith("main-vertical"):
                     self.assertEqual(geometry[content.id][2:4], [80, 40])
-                    self.assertEqual(geometry[content.id][0], 40 if preset.endswith("mirrored") else 25)
+                    self.assertEqual(geometry[content.id][0], 40 if preset.endswith("mirrored") else 37)
 
     def test_layouts_repair_damage_from_native_presets_and_keep_sidebar_focus(self):
         _, content, sidebar = self.workspace()
@@ -728,9 +728,10 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertEqual(workspace.id, session)
         self.assertEqual(workspace.name, "000001-My Project")
         self.assertEqual(workspace.label, "My Project")
-        self.assertEqual(sidebar.width, 24)
+        self.assertEqual(sidebar.width, 36)
         self.assertEqual(self.tmux.run("show-options", "-gv", "status-position"), "top")
-        eventually(lambda: "WORKSPACES" in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
+        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).startswith("\n› My Project"))
+        self.assertNotIn("WORKSPACES", self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
         tab_content = self.tmux.new_tab(content.id, "editor")
         panes = self.tmux.panes(self.tmux.pane(tab_content).window)
         self.assertEqual(sum(pane.sidebar for pane in panes), 1)
@@ -748,7 +749,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         panes = self.tmux.panes(content.window)
         self.assertEqual(len(panes), 4)
         self.assertEqual(sum(pane.sidebar for pane in panes), 1)
-        self.assertEqual(self.tmux.pane(sidebar.id).width, 24)
+        self.assertEqual(self.tmux.pane(sidebar.id).width, 36)
         sidebar_height = self.tmux.run("display-message", "-p", "-t", sidebar.id, "#{pane_height}")
         window_height = self.tmux.run("display-message", "-p", "-t", sidebar.id, "#{window_height}")
         self.assertEqual(sidebar_height, window_height)
@@ -814,7 +815,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         eventually(lambda: self.tmux.pane(first + ":").sidebar)
         selected_sidebar = self.tmux.pane(first + ":")
         # Send navigation through curses, then verify the attached client's session.
-        eventually(lambda: "WORKSPACES" in self.tmux.run("capture-pane", "-p", "-t", selected_sidebar.id))
+        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", selected_sidebar.id).startswith("\n› first"))
         self.tmux.run("send-keys", "-t", selected_sidebar.id, "Down", "Enter")
         eventually(lambda: self.tmux.run("display-message", "-p", "-c", client, "#{session_id}") == second)
         self.assertFalse(self.tmux.pane(second + ":").sidebar)
@@ -827,22 +828,32 @@ class TmuxIntegrationTests(unittest.TestCase):
         fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 80, 0, 0))
         os.kill(client.pid, signal.SIGWINCH)
         eventually(lambda: self.tmux.pane(sidebar.id).window_width == 80)
-        eventually(lambda: self.tmux.pane(sidebar.id).width == 24)
+        eventually(lambda: self.tmux.pane(sidebar.id).width == 36)
         self.tmux.run("resize-pane", "-Z", "-t", content.id)
         self.tmux.repair_width(sidebar.id)
         self.assertTrue(self.tmux.pane(sidebar.id).zoomed)
         self.tmux.run("resize-pane", "-Z", "-t", content.id)
-        eventually(lambda: self.tmux.pane(sidebar.id).width == 24)
+        eventually(lambda: self.tmux.pane(sidebar.id).width == 36)
+        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 40, 0, 0))
+        os.kill(client.pid, signal.SIGWINCH)
+        eventually(lambda: self.tmux.pane(sidebar.id).window_width == 40)
+        eventually(lambda: self.tmux.pane(sidebar.id).width == 20)
 
     def test_mouse_click_selects_workspace_from_content_focus(self):
         first, _, sidebar = self.workspace("first")
         second, _, _ = self.workspace("second")
         master, _, client = self.attach(first)
-        eventually(lambda: "WORKSPACES" in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
-        # SGR left-click at sidebar item two: status row + heading + blank + two items.
-        os.write(master, b"\x1b[<0;3;5M\x1b[<0;3;5m")
+        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).startswith("\n› first"))
+        # Second workspace is pane row 2, plus one top status row (SGR coordinates are 1-based).
+        os.write(master, b"\x1b[<0;3;4M\x1b[<0;3;4m")
         eventually(lambda: self.tmux.run("display-message", "-p", "-c", client, "#{session_id}") == second)
         self.assertFalse(self.tmux.pane(second + ":").sidebar)
+        other = next(item for item in self.tmux.panes(self.tmux.pane(second + ":").window) if item.sidebar)
+        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", other.id).startswith("\n  first"))
+        # The first workspace is on pane row 1, below the restored blank row.
+        os.write(master, b"\x1b[<0;3;3M\x1b[<0;3;3m")
+        eventually(lambda: self.tmux.run("display-message", "-p", "-c", client, "#{session_id}") == first)
+        self.assertFalse(self.tmux.pane(first + ":").sidebar)
 
     def test_workspace_and_tab_navigation_bindings_work_from_terminal(self):
         first, original, _ = self.workspace("first")
@@ -908,8 +919,8 @@ class TmuxIntegrationTests(unittest.TestCase):
         eventually(lambda: any(tab.id == content.window and tab.state == "alert"
                                for tab in self.tmux.attention_tabs()))
         eventually(lambda: "└─ ●" in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
-        # Child of the first workspace: screen row 3, plus the status line.
-        os.write(master, b"\x1b[<0;3;5M\x1b[<0;3;5m")
+        # Child of the first workspace: pane row 2, plus the top status line.
+        os.write(master, b"\x1b[<0;3;4M\x1b[<0;3;4m")
         eventually(lambda: self.tmux.pane(session + ":").id == content.id)
         eventually(lambda: not any(tab.id == content.window for tab in self.tmux.attention_tabs()))
 
@@ -925,7 +936,7 @@ class TmuxIntegrationTests(unittest.TestCase):
                 self.tmux.report_agent_state(content.id, state, os.getpid())
                 self.tmux.run("send-keys", "-t", content.id, "printf '\\a'", "Enter")
                 eventually(lambda: f"─ {indicator} " in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
-                os.write(master, b"\x1b[<0;3;5M\x1b[<0;3;5m")
+                os.write(master, b"\x1b[<0;3;4M\x1b[<0;3;4m")
                 eventually(lambda: self.tmux.pane(session + ":").id == content.id)
                 eventually(lambda: not any(tab.id == content.window for tab in self.tmux.attention_tabs()))
                 eventually(lambda: f"─ {indicator} " not in self.tmux.run("capture-pane", "-p", "-t", original_sidebar.id))
@@ -947,8 +958,8 @@ class TmuxIntegrationTests(unittest.TestCase):
         master, _, client = self.attach(first)
         self.tmux.run("send-keys", "-t", attention, "printf '\\a'", "Enter")
         eventually(lambda: "─ ⚠ " in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
-        # First workspace, second workspace, then its child: global terminal row 6.
-        os.write(master, b"\x1b[<0;3;6M\x1b[<0;3;6m")
+        # First workspace, second workspace, then its child: global terminal row 5.
+        os.write(master, b"\x1b[<0;3;5M\x1b[<0;3;5m")
         eventually(lambda: self.tmux.run("display-message", "-p", "-c", client, "#{session_id}") == second)
         eventually(lambda: self.tmux.pane(second + ":").id == attention)
         self.assertEqual(self.tmux.pane(second + ":").window, target)

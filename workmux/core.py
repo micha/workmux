@@ -101,7 +101,7 @@ def validate_directory(directory: str) -> str:
 
 
 def sidebar_width(window_width: int) -> int:
-    return min(24, max(4, window_width - 20))
+    return min(36, max(4, window_width - 20))
 
 
 class Tmux:

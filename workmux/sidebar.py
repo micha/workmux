@@ -88,8 +88,7 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                 rows = sidebar_rows(tmux.workspaces(), tmux.attention_tabs())
             except WorkmuxError as error:
                 screen.erase()
-                draw_text(screen, 0, "WORKSPACES", curses.A_BOLD)
-                draw_text(screen, 2, str(error))
+                draw_text(screen, 1, str(error))
                 screen.refresh()
                 screen.getch()
                 continue
@@ -101,17 +100,16 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                 selected_key = current if current in keys else parent if parent in keys else (keys[0] if keys else None)
             index = keys.index(selected_key) if selected_key in keys else 0
             height, width = screen.getmaxyx()
-            visible_rows = max(1, height - 5)
+            visible_rows = max(1, height - 4)
             offset = visible_offset(index, offset, visible_rows)
             screen.erase()
-            draw_text(screen, 0, "WORKSPACES", curses.A_BOLD)
             for position, row in enumerate(rows[offset:offset + visible_rows]):
                 current = row.session == pane.session and (row.window is None or row.window == pane.window)
                 marker = "›" if current else " "
                 attribute = curses.A_REVERSE if pane.active and row.key == selected_key else 0
                 if current or row.state in ("attention", "alert"):
                     attribute |= curses.A_BOLD
-                draw_text(screen, position + 2, f"{marker} {row.text}", attribute)
+                draw_text(screen, position + 1, f"{marker} {row.text}", attribute)
             draw_text(screen, height - 2, message or "Enter: select  q: back", curses.A_DIM)
             screen.refresh()
             key = screen.getch()
@@ -127,8 +125,8 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                     _, x, y, _, buttons = curses.getmouse()
                 except curses.error:
                     continue  # A mouse event may disappear during a resize.
-                clicked = y - 2 + offset
-                if 0 <= x < width and 2 <= y < 2 + visible_rows and 0 <= clicked < len(rows) and buttons & (
+                clicked = y - 1 + offset
+                if 0 <= x < width and 1 <= y < 1 + visible_rows and 0 <= clicked < len(rows) and buttons & (
                     curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED
                 ):
                     destination = rows[clicked]

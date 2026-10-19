@@ -35,9 +35,11 @@ class InputTests(unittest.TestCase):
 
     def test_sidebar_width_keeps_room_for_content(self):
         for width in range(25, 501):
-            self.assertLessEqual(sidebar_width(width), 24)
+            self.assertLessEqual(sidebar_width(width), 36)
             self.assertGreaterEqual(width - sidebar_width(width), 20)
-        self.assertEqual(sidebar_width(120), 24)
+        self.assertEqual(sidebar_width(120), 36)
+        self.assertEqual(sidebar_width(56), 36)
+        self.assertEqual(sidebar_width(40), 20)
         self.assertEqual(sidebar_width(30), 10)
 
     def test_scroll_offset_always_keeps_selected_row_visible(self):
