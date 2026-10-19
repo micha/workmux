@@ -92,13 +92,42 @@ class TmuxIntegrationTests(unittest.TestCase):
         reader = threading.Thread(target=drain, daemon=True)
         reader.start()
         self.reader_threads.append(reader)
-        client_name = eventually(lambda: self.tmux.run("list-clients", "-F", "#{client_name}"))
+
+        def attached_client():
+            # Registration precedes attachment. Match this process and wait for its
+            # requested session instead of accepting any client on the server.
+            clients = self.tmux.run(
+                "list-clients", "-F", "#{client_pid}\t#{client_name}\t#{session_id}",
+            )
+            for line in clients.splitlines():
+                pid, name, attached_session = line.split("\t")
+                if pid == str(client.pid) and attached_session == session:
+                    return name
+            return None
+
+        client_name = eventually(attached_client, "client did not attach to the requested session")
         return master, client, client_name
+
+    def client_session(self, client):
+        # display-message -c chooses where to display a message, not the pane
+        # context used for #{session_id}. Query the actual client's session.
+        clients = self.tmux.run("list-clients", "-F", "#{client_name}\t#{session_id}")
+        return dict(line.split("\t") for line in clients.splitlines()).get(client)
 
     def native_session(self, name="native"):
         pane = self.tmux.run("new-session", "-d", "-s", name, "-x", "120", "-y", "40",
                              "-P", "-F", "#{pane_id}")
         return self.tmux.pane(pane).session, pane
+
+    def test_attach_identifies_each_client_and_waits_for_its_session(self):
+        first, _ = self.native_session("first")
+        second, _ = self.native_session("second")
+        _, first_process, first_client = self.attach(first)
+        _, second_process, second_client = self.attach(second)
+        self.assertNotEqual(first_client, second_client)
+        for client, session in ((first_client, first), (second_client, second)):
+            self.assertEqual(self.client_session(client), session)
+        self.assertNotEqual(first_process.pid, second_process.pid)
 
     def test_last_shell_exit_closes_enabled_workspace_and_attached_client(self):
         session, pane = self.native_session()
@@ -175,7 +204,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         _, client, client_name = self.attach(session)
         self.tmux.run("send-keys", "-t", pane, "exit", "Enter")
         eventually(lambda: not self.tmux.workspaces())
-        eventually(lambda: self.tmux.run("display-message", "-p", "-c", client_name, "#{session_id}") == other)
+        eventually(lambda: self.client_session(client_name) == other)
         self.assertIsNone(client.poll())
         self.assertEqual(self.tmux.run("show-options", "-gv", "detach-on-destroy"), "off")
         self.assertEqual(self.tmux.pane(other_pane).session, other)
@@ -804,11 +833,11 @@ class TmuxIntegrationTests(unittest.TestCase):
         # Demonstrate the proposed future reordering mechanism, without adding UI.
         self.tmux.run("rename-session", "-t", third, "000000-third")
         self.tmux.run("switch-client", "-c", client, "-n")
-        self.assertEqual(self.tmux.run("display-message", "-p", "-c", client, "#{session_id}"), second)
+        eventually(lambda: self.client_session(client) == second)
         self.tmux.run("switch-client", "-c", client, "-n")
-        self.assertEqual(self.tmux.run("display-message", "-p", "-c", client, "#{session_id}"), third)
+        eventually(lambda: self.client_session(client) == third)
         self.tmux.run("switch-client", "-c", client, "-p")
-        self.assertEqual(self.tmux.run("display-message", "-p", "-c", client, "#{session_id}"), second)
+        eventually(lambda: self.client_session(client) == second)
 
     def test_real_prefix_bindings_and_picker_switch_workspaces(self):
         first, content, sidebar = self.workspace("first")
@@ -833,7 +862,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         # Send navigation through curses, then verify the attached client's session.
         eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", selected_sidebar.id).startswith("\n› first"))
         self.tmux.run("send-keys", "-t", selected_sidebar.id, "Down", "Enter")
-        eventually(lambda: self.tmux.run("display-message", "-p", "-c", client, "#{session_id}") == second)
+        eventually(lambda: self.client_session(client) == second)
         self.assertFalse(self.tmux.pane(second + ":").sidebar)
         self.tmux.run("switch-client", "-c", client, "-t", first)
         self.assertEqual(self.tmux.pane(first + ":").window, tab.window)
@@ -880,13 +909,13 @@ class TmuxIntegrationTests(unittest.TestCase):
         eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).startswith("\n› first"))
         # Second workspace is pane row 2, plus one top status row (SGR coordinates are 1-based).
         os.write(master, b"\x1b[<0;3;4M\x1b[<0;3;4m")
-        eventually(lambda: self.tmux.run("display-message", "-p", "-c", client, "#{session_id}") == second)
+        eventually(lambda: self.client_session(client) == second)
         self.assertFalse(self.tmux.pane(second + ":").sidebar)
         other = next(item for item in self.tmux.panes(self.tmux.pane(second + ":").window) if item.sidebar)
         eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", other.id).startswith("\n  first"))
         # The first workspace is on pane row 1, below the restored blank row.
         os.write(master, b"\x1b[<0;3;3M\x1b[<0;3;3m")
-        eventually(lambda: self.tmux.run("display-message", "-p", "-c", client, "#{session_id}") == first)
+        eventually(lambda: self.client_session(client) == first)
         self.assertFalse(self.tmux.pane(first + ":").sidebar)
 
     def test_workspace_and_tab_navigation_bindings_work_from_terminal(self):
@@ -900,9 +929,9 @@ class TmuxIntegrationTests(unittest.TestCase):
         os.write(master, b"\x02\x1b[C")
         eventually(lambda: self.tmux.pane(first + ":").id == tab)
         os.write(master, b"\x02\x1b[B")
-        eventually(lambda: self.tmux.run("display-message", "-p", "-c", client, "#{session_id}") == second)
+        eventually(lambda: self.client_session(client) == second)
         os.write(master, b"\x02\x1b[A")
-        eventually(lambda: self.tmux.run("display-message", "-p", "-c", client, "#{session_id}") == first)
+        eventually(lambda: self.client_session(client) == first)
         self.assertEqual(self.tmux.pane(first + ":").id, tab)
 
     def test_detach_reattach_keeps_workspace_tabs_and_panes(self):
@@ -994,7 +1023,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         eventually(lambda: "─ ⚠ " in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
         # First workspace, second workspace, then its child: global terminal row 5.
         os.write(master, b"\x1b[<0;3;5M\x1b[<0;3;5m")
-        eventually(lambda: self.tmux.run("display-message", "-p", "-c", client, "#{session_id}") == second)
+        eventually(lambda: self.client_session(client) == second)
         eventually(lambda: self.tmux.pane(second + ":").id == attention)
         self.assertEqual(self.tmux.pane(second + ":").window, target)
         self.assertEqual(next(tab.state for tab in self.tmux.attention_tabs() if tab.id == target), "working")
