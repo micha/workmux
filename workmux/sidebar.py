@@ -7,7 +7,7 @@ import time
 import unicodedata
 
 from .core import Tab, Tmux, WorkmuxError, Workspace
-from .git_status import GitStatusCache
+from .git_status import GitStatus, GitStatusCache
 
 
 BRAILLE_WHEEL = ("⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "⣾")
@@ -37,7 +37,7 @@ class SidebarRow:
     window: str | None
     text: str
     state: str | None = None
-    git_state: str | None = None
+    git_states: GitStatus = ()
 
     @property
     def key(self) -> tuple[str, str | None]:
@@ -49,7 +49,7 @@ def _label(text: str) -> str:
 
 
 def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
-                 git_states: dict[str, str | None] | None = None) -> list[SidebarRow]:
+                 git_states: dict[str, GitStatus | None] | None = None) -> list[SidebarRow]:
     """Build a stable-ID tree; ordinary idle tabs never appear as child rows."""
     children = {}
     for tab in tabs:
@@ -57,11 +57,11 @@ def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
             children.setdefault(tab.session, []).append(tab)
     rows = []
     for position, workspace in enumerate(workspaces, 1):
-        git_state = (git_states or {}).get(workspace.id)
-        symbol = GIT_INDICATORS.get(git_state)
-        suffix = f" {symbol}" if symbol else ""
+        states = (git_states or {}).get(workspace.id) or ()
+        symbols = [GIT_INDICATORS[state] for state in states]
+        suffix = " " + " ".join(symbols) if symbols else ""
         rows.append(SidebarRow(workspace.id, None, f"{position}:{_label(workspace.name)}{suffix}",
-                               git_state=git_state))
+                               git_states=states))
         windows = sorted(children.get(workspace.id, []), key=lambda tab: tab.index)
         for index, tab in enumerate(windows):
             branch = "└─" if index == len(windows) - 1 else "├─"
@@ -131,7 +131,7 @@ def working_indicator(now: float) -> str:
 
 def draw_row(screen, position: int, marker: str, row: SidebarRow, attribute: int,
              colors: dict[str, int], working_frame: str | None = None) -> None:
-    """Draw a row, applying color only to its possibly animated status symbol."""
+    """Draw a row, coloring its status symbols independently."""
     text = f"{marker} {row.text}"
     indicator = INDICATORS.get(row.state or "")
     symbol_x = text.find(indicator) if indicator else -1
@@ -143,16 +143,19 @@ def draw_row(screen, position: int, marker: str, row: SidebarRow, attribute: int
         color = colors.get(row.state or "", colors.get("other", 0))
         if color:
             draw_text(screen, position, indicator, attribute | color, x=symbol_x, max_width=2)
-    if row.git_state in GIT_INDICATORS:
-        # The suffix is not found by searching: a session name may contain it too.
-        indicator = GIT_INDICATORS[row.git_state]
-        prefix = text[:-len(indicator)]
+    if row.git_states:
+        # Locate the suffix structurally: session names may contain symbols too.
+        suffix = " ".join(GIT_INDICATORS[state] for state in row.git_states)
+        prefix = text[:-len(suffix)]
         symbol_x = sum(0 if unicodedata.combining(char) else
                        2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
                        for char in prefix)
-        color = colors.get(f"git-{row.git_state}", 0)
-        if color:
-            draw_text(screen, position, indicator, attribute | color, x=symbol_x, max_width=2)
+        for state in row.git_states:
+            indicator = GIT_INDICATORS[state]
+            color = colors.get(f"git-{state}", 0)
+            if color:
+                draw_text(screen, position, indicator, attribute | color, x=symbol_x, max_width=2)
+            symbol_x += 2  # Each Git symbol occupies one cell, followed by a space.
 
 
 def run_sidebar(tmux: Tmux, pane_id: str) -> None:

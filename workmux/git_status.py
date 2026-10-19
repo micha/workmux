@@ -10,10 +10,11 @@ from .core import Workspace
 
 POLL_INTERVAL = 2.0
 PROBE_TIMEOUT = 2.0
+GitStatus = tuple[str, ...]
 
 
-def parse_status(output: bytes) -> str:
-    """Classify porcelain v2; filenames (including rename sources) stay opaque."""
+def parse_status(output: bytes) -> GitStatus:
+    """Collect porcelain v2 states; filenames (including rename sources) stay opaque."""
     dirty = conflict = False
     ahead = behind = 0
     records = iter(output.split(b"\0"))
@@ -27,20 +28,21 @@ def parse_status(output: bytes) -> str:
             dirty = True
             if record.startswith(b"2 "):
                 next(records, None)  # Rename/copy source is a separate NUL field.
+    states = []
     if conflict:
-        return "conflict"
+        states.append("conflict")
     if dirty:
-        return "dirty"
+        states.append("dirty")
     if ahead and behind:
-        return "diverged"
-    if behind:
-        return "behind"
-    if ahead:
-        return "ahead"
-    return "clean"
+        states.append("diverged")
+    elif behind:
+        states.append("behind")
+    elif ahead:
+        states.append("ahead")
+    return tuple(states) or ("clean",)
 
 
-def probe_status(directory: str) -> str | None:
+def probe_status(directory: str) -> GitStatus | None:
     if not directory:
         return None
     try:
@@ -58,7 +60,7 @@ def probe_status(directory: str) -> str | None:
 @dataclass
 class _Entry:
     future: Future
-    state: str | None = None
+    state: GitStatus | None = None
     next_poll: float = 0.0
 
 
@@ -69,7 +71,7 @@ class GitStatusCache:
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="workmux-git")
         self.entries: dict[str, _Entry] = {}
 
-    def snapshot(self, workspaces: list[Workspace]) -> dict[str, str | None]:
+    def snapshot(self, workspaces: list[Workspace]) -> dict[str, GitStatus | None]:
         now = time.monotonic()
         directories = {workspace.directory for workspace in workspaces if workspace.directory}
         for directory in self.entries.keys() - directories:

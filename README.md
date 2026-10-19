@@ -164,22 +164,25 @@ support and a curses build that exposes the corresponding wheel buttons.
 
 ### Git status
 
-A single colored symbol follows each workspace name, for example `1:workmux ●`.
-It describes the repository containing the workspace's saved directory (the
+Colored symbols follow each workspace name, for example `1:workmux ● ↑`.
+They describe the repository containing the workspace's saved directory (the
 content pane directory when first enabled), not whichever directory a shell
 later changes into.
 
 | Indicator | Color | Git state |
 | --- | --- | --- |
 | `✓` | Green | Clean; in sync if an upstream is configured |
-| `●` | Yellow | Local changes, including staged or untracked files |
+| `●` | Yellow | Non-conflicting local changes, including staged or untracked files |
 | `↑` | Cyan | Ahead of upstream |
 | `↓` | Blue | Behind upstream |
 | `↕` | Magenta | Ahead and behind upstream (diverged) |
 | `!` | Red | Merge conflicts |
 
-Conflicts take priority over local changes, then divergence, behind, ahead, and
-clean. Without an upstream, only clean/local changes/conflicts are shown.
+All applicable indicators are shown: conflicts first, then non-conflicting local
+changes, then upstream status. For example, `! ● ↕` means merge conflicts, other
+local changes, and a diverged branch. Divergence uses `↕` instead of separate
+`↑ ↓` symbols. `✓` appears only when there are no changes, conflicts, or upstream
+differences. Without an upstream, only clean/local changes/conflicts are shown.
 Git must be available on the sidebar process's `PATH`; it is optional. Non-Git
 folders and unavailable or failed checks show no symbol. Colors fall back to
 plain symbols on terminals without color support.
