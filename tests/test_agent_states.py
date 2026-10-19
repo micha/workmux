@@ -119,10 +119,16 @@ class SidebarTreeTests(unittest.TestCase):
             colors = status_attributes()
 
         self.assertEqual(colors, {"working": 256, "attention": 512,
-                                  "finished": 768, "other": 1024})
+                                  "finished": 768, "other": 1024,
+                                  "git-clean": 1280, "git-dirty": 1536,
+                                  "git-ahead": 1792, "git-behind": 2048,
+                                  "git-diverged": 2304, "git-conflict": 2560})
         self.assertEqual([call.args[1] for call in init_pair.call_args_list],
                          [curses.COLOR_BLUE, curses.COLOR_RED,
-                          curses.COLOR_GREEN, curses.COLOR_YELLOW])
+                          curses.COLOR_GREEN, curses.COLOR_YELLOW,
+                          curses.COLOR_GREEN, curses.COLOR_YELLOW,
+                          curses.COLOR_CYAN, curses.COLOR_BLUE,
+                          curses.COLOR_MAGENTA, curses.COLOR_RED])
 
     def test_working_indicator_cycles_through_braille_wheel(self):
         self.assertEqual([working_indicator(frame * ANIMATION_INTERVAL)

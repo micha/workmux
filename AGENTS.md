@@ -28,6 +28,9 @@
   for the optional isolated-server workflow.
 - `workmux/layouts.py`: pure geometry and portable tmux layout serialization.
 - `workmux/sidebar.py`: terminal rendering and workspace navigation.
+- `workmux/git_status.py`: optional, local-only Git probes and nonblocking sidebar
+  cache. Use saved workspace directories, preserve filenames as opaque porcelain
+  records, and never fetch or take optional index locks.
 - `workmux/plugins.py`: explicit, safe installation/removal and status reporting
   for bundled agent extensions.
 - `workmux/resources/pi-notify.ts`: Pi lifecycle state reports, notifications,

@@ -154,6 +154,33 @@ using ordinary pane navigation and use Up/Down or j/k followed by Enter. Escape/
 returns to the remembered content pane. The `›` marker identifies the current workspace.
 Workspace selection restores the destination session's selected tab.
 
+### Git status
+
+A single colored symbol follows each workspace name, for example `1:workmux ●`.
+It describes the repository containing the workspace's saved directory (the
+content pane directory when first enabled), not whichever directory a shell
+later changes into.
+
+| Indicator | Color | Git state |
+| --- | --- | --- |
+| `✓` | Green | Clean; in sync if an upstream is configured |
+| `●` | Yellow | Local changes, including staged or untracked files |
+| `↑` | Cyan | Ahead of upstream |
+| `↓` | Blue | Behind upstream |
+| `↕` | Magenta | Ahead and behind upstream (diverged) |
+| `!` | Red | Merge conflicts |
+
+Conflicts take priority over local changes, then divergence, behind, ahead, and
+clean. Without an upstream, only clean/local changes/conflicts are shown.
+Git must be available on the sidebar process's `PATH`; it is optional. Non-Git
+folders and unavailable or failed checks show no symbol. Colors fall back to
+plain symbols on terminals without color support.
+
+Checks run in the background, normally every two seconds, without fetching or
+refreshing Git's index on disk. Ahead/behind compares against the locally known
+upstream, so it may be stale until you fetch. Slow checks time out and do not
+block sidebar navigation.
+
 ### Activity tree
 
 Tabs with agent activity or tmux alerts appear beneath their workspace:

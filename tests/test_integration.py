@@ -72,6 +72,28 @@ class TmuxIntegrationTests(unittest.TestCase):
         sidebar = next(pane for pane in self.tmux.panes(content.window) if pane.sidebar)
         return session, content, sidebar
 
+    @unittest.skipUnless(shutil.which("git"), "Git is optional")
+    def test_sidebar_git_status_tracks_workspace_directory(self):
+        directory = Path(self.temporary.name) / "repo space; $literal"
+        directory.mkdir()
+        subprocess.run(["git", "init", "-b", "main", str(directory)], check=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       env=dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1"))
+        session = self.tmux.new_workspace("git-project", str(directory))
+        content = self.tmux.pane(session + ":")
+        sidebar = next(pane for pane in self.tmux.panes(content.window) if pane.sidebar)
+        self.attach(session)
+
+        def shows(symbol):
+            return f"1:git-project {symbol}" in self.tmux.run("capture-pane", "-p", "-t", sidebar.id)
+
+        eventually(lambda: shows("✓"), "clean repository indicator did not appear")
+        (directory / "new file").write_text("untracked")
+        eventually(lambda: shows("●"), "untracked file did not change repository indicator")
+        (directory / "new file").unlink()
+        eventually(lambda: shows("✓"), "clean repository indicator did not return")
+        self.assertEqual(self.tmux.pane(content.id).id, content.id)
+
     def attach(self, session):
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))

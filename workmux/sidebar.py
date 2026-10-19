@@ -4,19 +4,29 @@ import curses
 from dataclasses import dataclass
 import re
 import time
+import unicodedata
 
 from .core import Tab, Tmux, WorkmuxError, Workspace
+from .git_status import GitStatusCache
 
 
 BRAILLE_WHEEL = ("⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "⣾")
 ANIMATION_INTERVAL = 0.125
 SNAPSHOT_INTERVAL = 0.4
 INDICATORS = {"working": BRAILLE_WHEEL[0], "attention": "⚠", "finished": "✓", "alert": "●"}
+GIT_INDICATORS = {"clean": "✓", "dirty": "●", "ahead": "↑", "behind": "↓",
+                  "diverged": "↕", "conflict": "!"}
 STATUS_FOREGROUNDS = {
     "working": curses.COLOR_BLUE,
     "attention": curses.COLOR_RED,
     "finished": curses.COLOR_GREEN,
     "other": curses.COLOR_YELLOW,
+    "git-clean": curses.COLOR_GREEN,
+    "git-dirty": curses.COLOR_YELLOW,
+    "git-ahead": curses.COLOR_CYAN,
+    "git-behind": curses.COLOR_BLUE,
+    "git-diverged": curses.COLOR_MAGENTA,
+    "git-conflict": curses.COLOR_RED,
 }
 
 
@@ -26,6 +36,7 @@ class SidebarRow:
     window: str | None
     text: str
     state: str | None = None
+    git_state: str | None = None
 
     @property
     def key(self) -> tuple[str, str | None]:
@@ -36,7 +47,8 @@ def _label(text: str) -> str:
     return re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", text)
 
 
-def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab]) -> list[SidebarRow]:
+def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
+                 git_states: dict[str, str | None] | None = None) -> list[SidebarRow]:
     """Build a stable-ID tree; ordinary idle tabs never appear as child rows."""
     children = {}
     for tab in tabs:
@@ -44,7 +56,11 @@ def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab]) -> list[SidebarRo
             children.setdefault(tab.session, []).append(tab)
     rows = []
     for position, workspace in enumerate(workspaces, 1):
-        rows.append(SidebarRow(workspace.id, None, f"{position}:{_label(workspace.name)}"))
+        git_state = (git_states or {}).get(workspace.id)
+        symbol = GIT_INDICATORS.get(git_state)
+        suffix = f" {symbol}" if symbol else ""
+        rows.append(SidebarRow(workspace.id, None, f"{position}:{_label(workspace.name)}{suffix}",
+                               git_state=git_state))
         windows = sorted(children.get(workspace.id, []), key=lambda tab: tab.index)
         for index, tab in enumerate(windows):
             branch = "└─" if index == len(windows) - 1 else "├─"
@@ -112,9 +128,21 @@ def draw_row(screen, position: int, marker: str, row: SidebarRow, attribute: int
         color = colors.get(row.state or "", colors.get("other", 0))
         if color:
             draw_text(screen, position, indicator, attribute | color, x=symbol_x, max_width=2)
+    if row.git_state in GIT_INDICATORS:
+        # The suffix is not found by searching: a session name may contain it too.
+        indicator = GIT_INDICATORS[row.git_state]
+        prefix = text[:-len(indicator)]
+        symbol_x = sum(0 if unicodedata.combining(char) else
+                       2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+                       for char in prefix)
+        color = colors.get(f"git-{row.git_state}", 0)
+        if color:
+            draw_text(screen, position, indicator, attribute | color, x=symbol_x, max_width=2)
 
 
 def run_sidebar(tmux: Tmux, pane_id: str) -> None:
+    git_status = GitStatusCache()
+
     def loop(screen):
         screen.keypad(True)
         screen.timeout(round(ANIMATION_INTERVAL * 1000))
@@ -139,7 +167,8 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                     previous_pane = pane
                     if pane.sidebar and tmux.run("display-message", "-p", "-t", pane_id, "#{window_panes}") == "1":
                         tmux.close_empty_window(pane)
-                    rows = sidebar_rows(tmux.workspaces(), tmux.attention_tabs())
+                    workspaces = tmux.workspaces()
+                    rows = sidebar_rows(workspaces, tmux.attention_tabs(), git_status.snapshot(workspaces))
                 except WorkmuxError as error:
                     screen.erase()
                     draw_text(screen, 1, str(error))
@@ -208,4 +237,7 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                 message = str(error)
                 next_snapshot = 0.0
 
-    curses.wrapper(loop)
+    try:
+        curses.wrapper(loop)
+    finally:
+        git_status.close()
