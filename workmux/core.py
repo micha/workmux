@@ -6,7 +6,7 @@ import re
 import shlex
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -83,6 +83,7 @@ class Pane:
     window_width: int
     zoomed: bool
     directory: str
+    preferred_sidebar_width: int = 36
 
 
 def validate_label(label: str) -> str:
@@ -100,8 +101,8 @@ def validate_directory(directory: str) -> str:
     return str(path)
 
 
-def sidebar_width(window_width: int) -> int:
-    return min(36, max(4, window_width - 20))
+def sidebar_width(window_width: int, preferred: int = 36) -> int:
+    return min(max(4, preferred), max(4, window_width - 20))
 
 
 class Tmux:
@@ -223,15 +224,20 @@ class Tmux:
     @staticmethod
     def _pane_format() -> str:
         return ("#{pane_id}\t#{session_id}\t#{window_id}\t#{@workspace-sidebar}\t#{pane_active}"
-                "\t#{pane_width}\t#{window_width}\t#{window_zoomed_flag}\t#{pane_current_path}")
+                "\t#{pane_width}\t#{window_width}\t#{window_zoomed_flag}\t#{pane_current_path}"
+                "\t#{@workmux-sidebar-width}")
 
     @staticmethod
     def _parse_pane(line: str, target: str) -> Pane:
         fields = line.split("\t")
-        if len(fields) != 9 or not fields[0]:
+        if len(fields) != 10 or not fields[0]:
             raise WorkmuxError(f"Cannot resolve pane: {target}")
+        try:
+            preferred_width = int(fields[9]) if fields[9] else 36
+        except ValueError:
+            preferred_width = 36
         return Pane(fields[0], fields[1], fields[2], fields[3] == "1", fields[4] == "1",
-                    int(fields[5]), int(fields[6]), fields[7] == "1", fields[8])
+                    int(fields[5]), int(fields[6]), fields[7] == "1", fields[8], preferred_width)
 
     def pane(self, target: str) -> Pane:
         line = self.run("display-message", "-p", "-t", target, self._pane_format())
@@ -277,8 +283,9 @@ class Tmux:
 
     def add_sidebar(self, content_id: str) -> str:
         pane = self.pane(content_id)
+        width = sidebar_width(pane.window_width, pane.preferred_sidebar_width)
         sidebar = self.run(
-            "split-window", "-hbf", "-d", "-l", str(sidebar_width(pane.window_width)),
+            "split-window", "-hbf", "-d", "-l", str(width),
             "-t", content_id, "-P", "-F", "#{pane_id}", self.helper("sidebar", "run"),
         )
         try:
@@ -387,8 +394,10 @@ class Tmux:
         main_width = self.run("display-message", "-p", "-t", pane.window, "#{main-pane-width}")
         main_height = self.run("display-message", "-p", "-t", pane.window, "#{main-pane-height}")
         try:
-            layout = workspace_layout(preset, sidebar.id, order, width, height, sidebar_width(width),
-                                      main_width, main_height)
+            layout = workspace_layout(
+                preset, sidebar.id, order, width, height,
+                sidebar_width(width, pane.preferred_sidebar_width), main_width, main_height,
+            )
         except ValueError as error:
             raise WorkmuxError(str(error)) from error
 
@@ -486,15 +495,26 @@ class Tmux:
         if content is not None:
             self.run("select-pane", "-t", content.id)
 
-    def repair_width(self, target: str) -> None:
+    def repair_width(self, target: str, previous: Pane | None = None) -> Pane:
         pane = self.pane(target)
         if pane.sidebar and not pane.zoomed:
             count = self.run("display-message", "-p", "-t", pane.id, "#{window_panes}")
             if count == "1":
-                return  # Empty tabs are closed by the sidebar; never resize a sole pane.
-            desired = sidebar_width(pane.window_width)
+                return pane  # Empty tabs are closed by the sidebar; never resize a sole pane.
+            desired = sidebar_width(pane.window_width, pane.preferred_sidebar_width)
             if pane.width != desired:
+                manually_resized = (
+                    previous is not None
+                    and pane.window_width == previous.window_width
+                    and pane.preferred_sidebar_width == previous.preferred_sidebar_width
+                    and pane.width != previous.width
+                )
+                if manually_resized:
+                    self.run("set-option", "-g", "@workmux-sidebar-width", str(pane.width))
+                    return replace(pane, preferred_sidebar_width=pane.width)
                 self.run("resize-pane", "-t", pane.id, "-x", str(desired))
+                return replace(pane, width=desired)
+        return pane
 
     def _default_config(self) -> str:
         context = ["--pane", "#{pane_id}"]

@@ -838,6 +838,24 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.run("switch-client", "-c", client, "-t", first)
         self.assertEqual(self.tmux.pane(first + ":").window, tab.window)
 
+    def test_sidebar_width_follows_global_option_and_mouse_resizing(self):
+        self.native_session()
+        self.tmux.run("set-option", "-g", "@workmux-sidebar-width", "28")
+        session = self.tmux.new_workspace("sized", self.temporary.name)
+        sidebar = next(pane for pane in self.tmux.panes(session + ":") if pane.sidebar)
+        self.assertEqual(sidebar.width, 28)
+
+        self.tmux.run("set-option", "-g", "@workmux-sidebar-width", "44")
+        eventually(lambda: self.tmux.pane(sidebar.id).width == 44)
+
+        before_drag = self.tmux.pane(sidebar.id)
+        self.tmux.run("resize-pane", "-t", sidebar.id, "-x", "30")
+        resized = self.tmux.repair_width(sidebar.id, before_drag)
+        self.assertEqual(resized.width, 30)
+        self.assertEqual(
+            self.tmux.run("show-options", "-gqv", "@workmux-sidebar-width"), "30"
+        )
+
     def test_resizing_restores_sidebar_width_and_zoom_does_not_fight_it(self):
         session, content, sidebar = self.workspace()
         master, client, _ = self.attach(session)

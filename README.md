@@ -371,8 +371,14 @@ this one to avoid duplicates. Workmux deliberately leaves other extensions alone
 - Sidebars are replicated per window and poll every 400 ms.
 - The tab bar is tmux's status line, at the user's configured position, spanning
   the whole terminal width. Workmux does not impose a theme on existing sessions.
-- Sidebars have one blank row at the top and no title, target 36 columns, and
-  shrink in narrow windows; use at least 40 columns.
+- Sidebars have one blank row at the top and no title. They default to 36 columns
+  and shrink in narrow windows; use at least 40 columns. Set the preferred width
+  globally in tmux configuration with `set-option -g @workmux-sidebar-width 30`,
+  or change it at runtime with `tmux set-option -g @workmux-sidebar-width 30`.
+  Existing sidebars adopt runtime changes automatically. With tmux's `mouse`
+  option enabled, dragging a sidebar border updates this global option and resizes
+  every sidebar. Workmux always reserves at least 20 columns for content and uses
+  at least 4 columns for the sidebar.
 - Layouts require at least two cells per pane dimension. Impossible layouts fail
   instead of being applied.
 - Raw tmux commands bypass binding adaptations. Run enable again to add sidebars

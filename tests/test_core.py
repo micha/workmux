@@ -41,6 +41,9 @@ class InputTests(unittest.TestCase):
         self.assertEqual(sidebar_width(56), 36)
         self.assertEqual(sidebar_width(40), 20)
         self.assertEqual(sidebar_width(30), 10)
+        self.assertEqual(sidebar_width(120, 48), 48)
+        self.assertEqual(sidebar_width(50, 48), 30)
+        self.assertEqual(sidebar_width(120, 2), 4)
 
     def test_scroll_offset_always_keeps_selected_row_visible(self):
         for rows in range(1, 20):
@@ -85,14 +88,15 @@ class InputTests(unittest.TestCase):
             self.assertIn('run-shell -b "workmux --server workmux ', output)
 
     def test_panes_are_read_in_one_snapshot_without_individual_id_lookups(self):
-        output = ("%1\t$0\t@0\t1\t0\t24\t120\t0\t/tmp\n"
-                  "%2\t$0\t@0\t\t1\t95\t120\t0\t/tmp")
+        output = ("%1\t$0\t@0\t1\t0\t24\t120\t0\t/tmp\t28\n"
+                  "%2\t$0\t@0\t\t1\t95\t120\t0\t/tmp\t28")
         tmux = Tmux()
         with patch.object(tmux, "run", return_value=output) as run:
             panes = tmux.panes("@0")
         self.assertEqual([pane.id for pane in panes], ["%1", "%2"])
         self.assertTrue(panes[0].sidebar)
         self.assertTrue(panes[1].active)
+        self.assertEqual(panes[0].preferred_sidebar_width, 28)
         run.assert_called_once_with("list-panes", "-t", "@0", "-F", tmux._pane_format())
 
     def test_workspace_resolution_by_id_name_or_label(self):

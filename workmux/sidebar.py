@@ -77,14 +77,15 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
             pass  # Cursor visibility is optional on some terminals.
         curses.mousemask(curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED)
         selected_key = None
+        previous_pane = None
         offset = 0
         message = ""
         while True:
             try:
-                pane = tmux.pane(pane_id)
+                pane = tmux.repair_width(pane_id, previous_pane)
+                previous_pane = pane
                 if pane.sidebar and tmux.run("display-message", "-p", "-t", pane_id, "#{window_panes}") == "1":
                     tmux.close_empty_window(pane)
-                tmux.repair_width(pane_id)
                 rows = sidebar_rows(tmux.workspaces(), tmux.attention_tabs())
             except WorkmuxError as error:
                 screen.erase()
