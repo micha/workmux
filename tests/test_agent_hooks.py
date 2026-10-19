@@ -118,7 +118,7 @@ class HookRunnerTests(unittest.TestCase):
         self.assertIn(b"Finished", write.call_args.args[1])
         close.assert_called_once_with(10)
         self.assertEqual(report.call_args.args[0],
-                         ["workmux", "agent", "state", "finished", "--pane", "%42", "--pid", "123"])
+                         ["workmux", "agent", "state", "finished", "--pane", "%42", "--pid", "123", "--root", "/repo"])
         self.assertEqual(report.call_args.kwargs["timeout"], 2)
         self.assertEqual(report.call_args.kwargs["stdout"], subprocess.DEVNULL)
 

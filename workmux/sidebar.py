@@ -2,10 +2,12 @@
 
 import curses
 from dataclasses import dataclass
+from pathlib import Path
 import re
 import time
 import unicodedata
 
+from .checkouts import CheckoutCache, contains
 from .core import Tab, Tmux, WorkmuxError, Workspace
 from .git_status import GitStatus, GitStatusCache
 
@@ -38,33 +40,71 @@ class SidebarRow:
     text: str
     state: str | None = None
     git_states: GitStatus = ()
+    directory: str | None = None
 
     @property
     def key(self) -> tuple[str, str | None]:
-        return self.session, self.window
+        return self.session, "checkout:" + self.directory if self.directory is not None else self.window
 
 
 def _label(text: str) -> str:
     return re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", text)
 
 
+def _git_suffix(states: GitStatus) -> str:
+    return " " + " ".join(GIT_INDICATORS[state] for state in states) if states else ""
+
+
+def _tab_checkout(tab: Tab, directories: tuple[str, ...]) -> str | None:
+    if not tab.roots or None in tab.roots:
+        return None
+    matches = set()
+    for root in tab.roots:
+        candidates = [directory for directory in directories if contains(directory, root)]
+        if not candidates:
+            return None
+        matches.add(max(candidates, key=len))
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
 def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
-                 git_states: dict[str, GitStatus | None] | None = None) -> list[SidebarRow]:
-    """Build a stable-ID tree; ordinary idle tabs never appear as child rows."""
+                 git_states: dict[str, GitStatus | None] | None = None,
+                 checkouts: dict[str, tuple[str, ...]] | None = None,
+                 checkout_windows: dict[tuple[str, str], str] | None = None) -> list[SidebarRow]:
+    """Stable-ID tree of workspaces, discovered checkouts, and active/alert tabs."""
+    git_states, checkouts, checkout_windows = git_states or {}, checkouts or {}, checkout_windows or {}
     children = {}
     for tab in tabs:
         if tab.state in INDICATORS:
             children.setdefault(tab.session, []).append(tab)
     rows = []
     for position, workspace in enumerate(workspaces, 1):
-        states = (git_states or {}).get(workspace.id) or ()
-        symbols = [GIT_INDICATORS[state] for state in states]
-        suffix = " " + " ".join(symbols) if symbols else ""
-        rows.append(SidebarRow(workspace.id, None, f"{position}:{_label(workspace.name)}{suffix}",
-                               git_states=states))
-        windows = sorted(children.get(workspace.id, []), key=lambda tab: tab.index)
-        for index, tab in enumerate(windows):
-            branch = "└─" if index == len(windows) - 1 else "├─"
+        states = git_states.get(workspace.id) or ()
+        rows.append(SidebarRow(workspace.id, None,
+                               f"{position}:{_label(workspace.name)}{_git_suffix(states)}", git_states=states))
+        directories = tuple(sorted(set(checkouts.get(workspace.id, ()))))
+        grouped = {directory: [] for directory in directories}
+        ungrouped = []
+        for tab in sorted(children.get(workspace.id, []), key=lambda tab: tab.index):
+            directory = _tab_checkout(tab, directories)
+            (grouped[directory] if directory else ungrouped).append(tab)
+        total = len(directories) + len(ungrouped)
+        for index, directory in enumerate(directories):
+            last = index == total - 1
+            branch = "└─" if last else "├─"
+            relative = str(Path(directory).relative_to(workspace.directory))
+            states = git_states.get(directory) or ()
+            window = checkout_windows.get((workspace.id, directory))
+            rows.append(SidebarRow(workspace.id, window,
+                                   f"  {branch} ⎇ {_label(relative)}{_git_suffix(states)}",
+                                   git_states=states, directory=directory))
+            for child_index, tab in enumerate(grouped[directory]):
+                connector = "└─" if child_index == len(grouped[directory]) - 1 else "├─"
+                prefix = "     " if last else "  │  "
+                text = f"{prefix}{connector} {INDICATORS[tab.state]} {tab.index}:{_label(tab.name)}"
+                rows.append(SidebarRow(workspace.id, tab.id, text, tab.state))
+        for index, tab in enumerate(ungrouped):
+            branch = "└─" if index == len(ungrouped) - 1 else "├─"
             text = f"  {branch} {INDICATORS[tab.state]} {tab.index}:{_label(tab.name)}"
             rows.append(SidebarRow(workspace.id, tab.id, text, tab.state))
     return rows
@@ -160,6 +200,7 @@ def draw_row(screen, position: int, marker: str, row: SidebarRow, attribute: int
 
 def run_sidebar(tmux: Tmux, pane_id: str) -> None:
     git_status = GitStatusCache()
+    checkout_cache = CheckoutCache()
 
     def loop(screen):
         screen.keypad(True)
@@ -189,7 +230,11 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                     if pane.sidebar and tmux.run("display-message", "-p", "-t", pane_id, "#{window_panes}") == "1":
                         tmux.close_empty_window(pane)
                     workspaces = tmux.workspaces()
-                    rows = sidebar_rows(workspaces, tmux.attention_tabs(), git_status.snapshot(workspaces))
+                    checkouts = checkout_cache.snapshot(workspaces)
+                    directories = tuple({directory for paths in checkouts.values() for directory in paths})
+                    windows = tmux.checkout_tabs() if directories else {}
+                    rows = sidebar_rows(workspaces, tmux.attention_tabs(),
+                                        git_status.snapshot(workspaces, directories), checkouts, windows)
                 except WorkmuxError as error:
                     screen.erase()
                     draw_text(screen, 1, str(error))
@@ -204,8 +249,11 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
             keys = [row.key for row in rows]
             if selected_key not in keys or not pane.active:
                 current = (pane.session, pane.window)
+                checkout = next((row.key for row in rows
+                                 if row.directory and row.session == pane.session and row.window == pane.window), None)
                 parent = (pane.session, None)
-                new_selection = current if current in keys else parent if parent in keys else (keys[0] if keys else None)
+                new_selection = (current if current in keys else checkout if checkout in keys else
+                                 parent if parent in keys else (keys[0] if keys else None))
                 if new_selection != selected_key:
                     follow_selection = True
                 selected_key = new_selection
@@ -217,7 +265,8 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                 offset = visible_offset(index, offset, visible_rows)
             screen.erase()
             for position, row in enumerate(rows[offset:offset + visible_rows]):
-                current = row.session == pane.session and (row.window is None or row.window == pane.window)
+                current = row.session == pane.session and (
+                    (row.window is None and row.directory is None) or row.window == pane.window)
                 marker = "›" if current else " "
                 attribute = curses.A_REVERSE if pane.active and row.key == selected_key else 0
                 if current or row.state in ("attention", "alert"):
@@ -258,7 +307,9 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                     follow_selection = True
             try:
                 if destination:
-                    if destination.window is None:
+                    if destination.directory is not None:
+                        tmux.select_checkout(destination.session, destination.directory, pane_id)
+                    elif destination.window is None:
                         tmux.select_workspace(destination.session, pane_id)
                     else:
                         tmux.select_tab(destination.session, destination.window, pane_id)
@@ -275,3 +326,4 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
         curses.wrapper(loop)
     finally:
         git_status.close()
+        checkout_cache.close()

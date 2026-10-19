@@ -115,7 +115,7 @@ try {
   assert.equal(maxExecuting, 1);
   for (const call of calls.slice(start)) {
     assert.equal(call.command, "workmux");
-    assert.deepEqual(call.args.slice(3), ["--pane", "%42", "--pid", String(process.pid)]);
+    assert.deepEqual(call.args.slice(3), ["--pane", "%42", "--pid", String(process.pid), "--root", ctx.cwd]);
     assert.equal(call.options.timeout, 2000);
   }
   checks++;

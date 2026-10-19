@@ -26,7 +26,8 @@ const lookups = [];
 const client = { session: { get: async ({ path: { id } }) => {
   lookups.push(id);
   if (id === "missing") throw new Error("closed session");
-  return { data: { id, parentID: id === "child" ? "root" : undefined } };
+  return { data: { id, parentID: id === "child" ? "root" : undefined,
+                   directory: id === "other" ? "/other/repo" : "/repo/control\x1b\x07name" } };
 } } };
 const input = { client, directory: "/repo/control\x1b\x07name" };
 const state = () => calls.at(-1).args[2];
@@ -50,7 +51,7 @@ try {
   assert.equal((output.match(/\x1b/g) || []).length, 4);
   assert.equal((output.match(/\x07/g) || []).length, 2);
   assert.equal(calls.at(-1).options.timeout, 2000);
-  assert.deepEqual(calls.at(-1).args.slice(3), ["--pane", "%42", "--pid", String(process.pid)]);
+  assert.deepEqual(calls.at(-1).args.slice(3), ["--pane", "%42", "--pid", String(process.pid), "--root", input.directory]);
   output = "";
   await fire("session.status", { status: { type: "busy" } });
   assert.equal(state(), "attention");
@@ -87,8 +88,10 @@ try {
   assert.equal(state(), "attention");
   await fire("session.status", { sessionID: "other", status: { type: "busy" } });
   assert.equal(state(), "attention");
+  assert.deepEqual(calls.at(-1).args.slice(7), ["--root", "/other/repo", "--root", input.directory]);
   await fire("session.deleted");
   assert.equal(state(), "working");
+  assert.equal(calls.at(-1).args.at(-1), "/other/repo");
   fail = true;
   await fire("session.idle", { sessionID: "other" });
   assert.equal(state(), "finished");

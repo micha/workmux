@@ -37,7 +37,7 @@ export default function (pi: ExtensionAPI) {
     // Serialize reports: blocking UI events can overlap with other lifecycle events.
     // Reporting is best-effort; missing workmux, a closed pane, or a timeout must
     // never prevent the agent from answering or displaying a question.
-    const args = ["agent", "state", state, "--pane", pane, "--pid", String(process.pid)];
+    const args = ["agent", "state", state, "--pane", pane, "--pid", String(process.pid), "--root", ctx.cwd];
     reports = reports.then(async () => {
       await pi.exec("workmux", args, { timeout: 2000 });
     }).catch(() => {});

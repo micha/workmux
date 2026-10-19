@@ -43,15 +43,16 @@ class _StopLoop(Exception):
 
 
 class SidebarLoopTests(unittest.TestCase):
-    def run_loop(self, actions, mouse_events=(), active=True, tabs=()):
+    def run_loop(self, actions, mouse_events=(), active=True, tabs=(), checkouts=None, windows=None):
         """Each action runs after a rendered frame; callable actions can resize."""
         tmux = Mock()
         tmux.repair_width.return_value = Pane("%0", "$0", "@0", True, active,
                                              36, 120, False, "/tmp")
         tmux.run.return_value = "2"
-        tmux.workspaces.return_value = [Workspace(f"${index}", f"repo-{index}", "", "")
+        tmux.workspaces.return_value = [Workspace(f"${index}", f"repo-{index}", "", "/jobs")
                                         for index in range(20)]
         tmux.attention_tabs.return_value = list(tabs)
+        tmux.checkout_tabs.return_value = windows or {}
         screen = Mock()
         screen.getmaxyx.return_value = (10, 36)  # Six tree rows.
         frames = []
@@ -82,9 +83,12 @@ class SidebarLoopTests(unittest.TestCase):
                                       drawn.append((row.key, attr))))
             cache = stack.enter_context(patch("workmux.sidebar.GitStatusCache"))
             cache.return_value.snapshot.return_value = {}
+            discovery = stack.enter_context(patch("workmux.sidebar.CheckoutCache"))
+            discovery.return_value.snapshot.return_value = checkouts or {}
             with self.assertRaises(_StopLoop):
                 run_sidebar(tmux, "%0")
             cache.return_value.close.assert_called_once()
+            discovery.return_value.close.assert_called_once()
             self.assertTrue(mousemask.call_args.args[0] & 64)
             self.assertTrue(mousemask.call_args.args[0] & 128)
         return frames, tmux
@@ -118,6 +122,34 @@ class SidebarLoopTests(unittest.TestCase):
                                 [(0, 2, 2, 0, 128), (0, 2, 2, 0, curses.BUTTON1_PRESSED)],
                                 tabs=tabs)
         tmux.select_tab.assert_called_once_with("$0", "@3", "%0")
+
+    def test_keyboard_checkout_selection_uses_path_and_parent_session(self):
+        _, tmux = self.run_loop([curses.KEY_DOWN, curses.KEY_ENTER],
+                                checkouts={'$0': ('/jobs/repos/api',)})
+        tmux.select_checkout.assert_called_once_with('$0', '/jobs/repos/api', '%0')
+        tmux.select_workspace.assert_not_called()
+        tmux.select_tab.assert_not_called()
+
+    def test_click_checkout_and_nested_agent_target_distinct_stable_identities(self):
+        path = '/jobs/repos/api'
+        tabs = [Tab('$0', '@7', 1, 'agent', 'working', roots=(path,))]
+        _, tmux = self.run_loop([curses.KEY_MOUSE, curses.KEY_MOUSE],
+                                [(0, 2, 2, 0, curses.BUTTON1_PRESSED),
+                                 (0, 2, 3, 0, curses.BUTTON1_PRESSED)],
+                                tabs=tabs, checkouts={'$0': (path,)})
+        tmux.select_checkout.assert_called_once_with('$0', path, '%0')
+        tmux.select_tab.assert_called_once_with('$0', '@7', '%0')
+
+    def test_idle_checkout_tab_focus_maps_back_to_checkout_row(self):
+        def change_focus(screen, tmux):
+            tmux.repair_width.return_value = Pane('%0', '$0', '@7', True, False,
+                                                 36, 120, False, '/jobs')
+            return -1
+        frames, _ = self.run_loop([change_focus], active=False,
+                                  checkouts={'$0': ('/jobs/repos/api',)},
+                                  windows={('$0', '/jobs/repos/api'): '@7'})
+        self.assertEqual(frames[-1][1][0], ('$0', 'checkout:/jobs/repos/api'))
+        self.assertTrue(frames[-1][1][1] & curses.A_BOLD)
 
     def test_scrolling_both_directions_and_clamping(self):
         frames, _ = self.run_loop([curses.KEY_MOUSE] * 9,

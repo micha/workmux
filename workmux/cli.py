@@ -71,6 +71,8 @@ def parser() -> argparse.ArgumentParser:
     state = agents.add_parser("state", help="Set or clear the agent state of a content pane")
     state.add_argument("state", choices=AGENT_STATES)
     state.add_argument("--pid", type=int, help="Agent process ID; ignore stale reports after it exits")
+    state.add_argument("--root", action="append",
+                       help="Absolute harness root directory for checkout grouping; repeat for multiple roots")
     add_pane(state)
     hook = agents.add_parser("hook", help="Internal best-effort Codex/Claude command hook")
     hook.add_argument("harness", choices=("codex", "claude"))
@@ -146,7 +148,8 @@ def main(argv: list[str] | None = None) -> int:
                 for warning in result.warnings:
                     print(f"workmux: {warning}", file=sys.stderr)
         elif args.command == "agent":
-            tmux.report_agent_state(require_pane(args), args.state, args.pid)
+            roots = args.root[0] if args.root and len(args.root) == 1 else args.root
+            tmux.report_agent_state(require_pane(args), args.state, args.pid, roots)
         elif args.command == "dispatch":
             tmux.dispatch(args.binding, require_pane(args))
         elif args.command == "workspace":

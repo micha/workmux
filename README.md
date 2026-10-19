@@ -162,9 +162,48 @@ workspace or tab. Click a visible row to select it; keyboard navigation resumes
 following the highlighted row. Wheel scrolling requires terminal/tmux mouse
 support and a curses build that exposes the corresponding wheel buttons.
 
+### Checkouts and worktrees
+
+A workspace may be a repository or a plain container directory holding job
+documents and several independent repositories/worktrees. Discovered checkouts
+appear as `⎇` rows with paths relative to the workspace's saved directory:
+
+```text
+1:job
+  ├─ ⎇ worktrees/team/backend ● ↑
+  │  └─ ⣷ 2:implement
+  ├─ ⎇ worktrees/team/frontend ✓
+  │  └─ ⚠ 3:review
+  └─ ⣷ 1:coordinate
+```
+
+Click a checkout row, or select it with Up/Down or j/k and Enter, to open a tab
+in that directory **within the parent workspace**. Later selections focus that
+associated tab, even if it has been renamed or its shell has changed directory.
+Closing the tab allows the next selection to open a fresh one. Discovery itself
+creates no tabs, sessions, repositories, branches, or worktrees.
+
+Discovery runs in the background, normally every five seconds. In a plain
+container it recognizes `.git` directories and linked-worktree `.git` files up
+to six directory levels below the saved directory; no particular directory or
+branch naming convention is required. It stops descending inside a checkout,
+using Git's registered worktrees to find additional checkouts beneath the
+workspace. Worktrees outside the workspace are not listed. Discovered directory
+symlinks are not followed, and missing directories are skipped. Each scan is
+limited to 2,000 directories, 16,000 directory entries, 128 Git queries, 64 checkouts,
+and a four-second time budget; large trees may therefore yield only a partial
+list. Paths containing tabs or
+newlines are unsupported, as with workspace directories.
+
+Every checkout has its own Git indicators. The workspace's indicators still
+refer only to its saved directory, not an aggregate of nested repositories.
+Removing a checkout removes its discovered row, **not its live tabs or content**.
+Any agent-state tab it contained remains visible directly under the workspace.
+Pushes, PRs, cleanup, and archiving remain outside workmux.
+
 ### Git status
 
-Colored symbols follow each workspace name, for example `1:workmux ● ↑`.
+Colored symbols follow workspace and checkout names, for example `1:workmux ● ↑`.
 They describe the repository containing the workspace's saved directory (the
 content pane directory when first enabled), not whichever directory a shell
 later changes into.
@@ -194,7 +233,9 @@ block sidebar navigation.
 
 ### Activity tree
 
-Tabs with agent activity or tmux alerts appear beneath their workspace:
+Tabs with agent activity or tmux alerts appear beneath their workspace, or beneath
+a discovered checkout when all live agent reports in the tab have explicit roots
+inside that checkout:
 
 ```text
 › project-a
@@ -214,10 +255,11 @@ Tabs with agent activity or tmux alerts appear beneath their workspace:
 
 Working tabs use an animated filled Braille wheel; the example above shows one frame.
 Click a child row to focus that tab, including tabs in other workspaces. Keyboard
-navigation with Up/Down or j/k and Enter works for both workspace and tab rows.
+navigation with Up/Down or j/k and Enter works for workspace, checkout, and tab rows.
 Agent rows prefer the pane needing attention when a tab contains multiple agents.
-Tabs are listed in window-index order; renaming or reordering them does not break
-their click targets. Idle tabs without alerts are hidden.
+Tabs are listed in window-index order within each group; renaming or reordering
+them does not break their click targets. Idle tabs without alerts are hidden,
+while discovered checkout rows remain visible.
 
 With several agents in one tab, pending attention takes priority over working,
 then pending finished. Attention and finished indicators classify native tmux
@@ -228,7 +270,13 @@ follow tmux's normal clearing behavior.
 
 Agent states come from explicit reports, not from guessing which shell commands
 are agents. Dead agent processes are ignored when the integration supplies their
-process ID.
+process ID. Checkout grouping uses reported harness roots, never shell cwd,
+commands, or tab associations. Tabs with unknown roots, roots spanning multiple
+checkouts, container-rooted agents, or only native alerts stay directly under the
+workspace. Bundled integrations report roots automatically; update installed
+integrations to get grouping. Custom reporters can pass an absolute `--root`
+to `workmux agent state` (repeat `--root` when one reporter aggregates multiple
+root sessions).
 
 Install an [agent integration](#optional-agent-integrations) for automatic reports.
 Native tmux alerts need no agent integration; their monitoring settings remain

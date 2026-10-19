@@ -8,7 +8,8 @@ import unittest
 from unittest.mock import patch
 
 from workmux.cli import main, resolve_workspace
-from workmux.core import Tmux, WorkmuxError, Workspace, sidebar_width, validate_directory, validate_label
+from workmux.core import (Tmux, WorkmuxError, Workspace, sidebar_width, tmux_argument,
+                          validate_directory, validate_label)
 from workmux.sidebar import visible_offset
 
 
@@ -32,6 +33,11 @@ class InputTests(unittest.TestCase):
             tabbed.mkdir()
             with self.assertRaises(WorkmuxError):
                 validate_directory(str(tabbed))
+
+    def test_native_tmux_arguments_escape_only_trailing_semicolons(self):
+        for value, expected in [('path space; middle', 'path space; middle'),
+                                ('name;', 'name\\;'), (';', '\\;'), ('normal', 'normal')]:
+            self.assertEqual(tmux_argument(value), expected)
 
     def test_sidebar_width_keeps_room_for_content(self):
         for width in range(25, 501):

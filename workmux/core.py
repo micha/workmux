@@ -40,6 +40,7 @@ class Tab:
     name: str
     state: str
     pane: str | None = None
+    roots: tuple[str | None, ...] = ()
 
 
 def _agent_state(value: str, alive: dict[int, bool]) -> str | None:
@@ -99,6 +100,11 @@ def validate_directory(directory: str) -> str:
     if any(character in str(path) for character in "\t\r\n"):
         raise WorkmuxError("Workspace directories cannot contain tabs or newlines.")
     return str(path)
+
+
+def tmux_argument(value: str) -> str:
+    """Quote trailing semicolons for tmux's argv parser, not for a shell."""
+    return value[:-1] + "\\;" if value.endswith(";") else value
 
 
 def sidebar_width(window_width: int, preferred: int = 36) -> int:
@@ -170,11 +176,15 @@ class Tmux:
                 result.append(Workspace(*fields[:4]))
         return sorted(result, key=lambda workspace: workspace.name)
 
-    def report_agent_state(self, target: str, state: str, pid: int | None = None) -> None:
+    def report_agent_state(self, target: str, state: str, pid: int | None = None,
+                           root: str | list[str] | None = None) -> None:
         if state not in AGENT_STATES:
             raise WorkmuxError(f"Unknown agent state: {state}")
         if pid is not None and pid <= 0:
             raise WorkmuxError("Agent PID must be positive.")
+        roots = [root] if isinstance(root, str) else root or []
+        if any(not isinstance(path, str) or not os.path.isabs(path) for path in roots):
+            raise WorkmuxError("Agent roots must be absolute directory paths.")
         pane = self.pane(target)
         if pane.sidebar:
             raise WorkmuxError("Agent state must target a content pane, not a sidebar.")
@@ -185,6 +195,12 @@ class Tmux:
             report = {"state": state}
             if pid is not None:
                 report["pid"] = pid
+            if roots:
+                normalized = sorted({os.path.realpath(path) for path in roots})
+                if len(normalized) == 1:
+                    report["root"] = normalized[0]
+                else:
+                    report["roots"] = normalized
             self.run("set-option", "-p", "-t", pane.id, "@workmux-agent", json.dumps(report))
 
     def attention_tabs(self) -> list[Tab]:
@@ -196,6 +212,7 @@ class Tmux:
             missing_ok=True,
         )
         tabs = {}
+        roots = {}
         alive = {}
         for line in output.splitlines():
             fields = line.split("\t", 8)
@@ -210,6 +227,15 @@ class Tmux:
             native = "alert" if any(flag in flags for flag in "!#~") else "idle"
             current = tabs.get(key, Tab(session, window, index, name, native))
             state = _agent_state(report, alive) if sidebar != "1" and dead != "1" else None
+            if state:
+                data = json.loads(report)
+                reported = data.get("roots", [data.get("root")])
+                if not isinstance(reported, list) or not reported:
+                    reported = [None]
+                for root in reported:
+                    root = root if isinstance(root, str) and os.path.isabs(root) else None
+                    if root not in roots.setdefault(key, []):
+                        roots[key].append(root)
             # Passive agent states classify pending alerts, not permanent tree rows.
             # Keep working visible independently, but hide attention/finished after
             # tmux acknowledges the window's bell/activity/silence alert.
@@ -218,7 +244,9 @@ class Tmux:
             if state and _AGENT_PRIORITY[state] > _AGENT_PRIORITY.get(current.state, 0):
                 current = Tab(session, window, index, name, state, pane)
             tabs[key] = current
-        return sorted((tab for tab in tabs.values() if tab.state != "idle"),
+        return sorted((replace(tab, roots=tuple(roots.get(key, ()))
+                               if any(root is not None for root in roots.get(key, ())) else ())
+                       for key, tab in tabs.items() if tab.state != "idle"),
                       key=lambda tab: (tab.session, tab.index))
 
     @staticmethod
@@ -307,13 +335,13 @@ class Tmux:
             raise WorkmuxError(f"Workspace already exists: {label}")
         name = label
         # Keep the bootstrap window large enough even when no client is attached.
-        content = self.run("new-session", "-d", "-s", name, "-c", directory,
+        content = self.run("new-session", "-d", "-s", name, "-c", tmux_argument(directory),
                            "-x", "120", "-y", "40", "-P", "-F", "#{pane_id}")
         session = self.pane(content).session
         try:
             for option, value in (("@workmux", "1"), ("@workspace-label", label),
                                   ("@workspace-dir", directory)):
-                self.run("set-option", "-t", session, option, value)
+                self.run("set-option", "-t", session, option, tmux_argument(value))
             integrated = self.run("show-options", "-sqv", "@workmux-integrated") == "1"
             if integrated:
                 self.run("set-option", "-t", session, "@workmux-enabled", "1")
@@ -333,7 +361,7 @@ class Tmux:
         pane = self.pane(target)
         workspace = self.require_workspace(pane.session)
         content = self.run("new-window", "-d", "-t", workspace.id + ":", "-n", name,
-                           "-c", workspace.directory, "-P", "-F", "#{pane_id}")
+                           "-c", tmux_argument(workspace.directory), "-P", "-F", "#{pane_id}")
         try:
             self.add_sidebar(content)
         except WorkmuxError:
@@ -341,6 +369,59 @@ class Tmux:
             raise
         self.run("select-window", "-t", self.pane(content).window)
         return content
+
+    def checkout_tabs(self) -> dict[tuple[str, str], str]:
+        """Read explicit window associations in one snapshot, never infer from cwd."""
+        output = self.run("list-windows", "-a", "-F",
+                          "#{session_id}\t#{window_id}\t#{@workmux-checkout}", missing_ok=True)
+        result = {}
+        for line in output.splitlines():
+            fields = line.split("\t", 2)
+            if len(fields) != 3:
+                continue
+            session, window, value = fields
+            try:
+                path = json.loads(value)
+            except ValueError:
+                continue
+            if isinstance(path, str) and os.path.isabs(path):
+                result.setdefault((session, path), window)
+        return result
+
+    def select_checkout(self, session: str, directory: str, source_pane: str,
+                        client: str | None = None) -> None:
+        from .checkouts import checkout_root, contains
+
+        workspace = self.require_workspace(session)
+        directory = validate_directory(directory)
+        if not contains(workspace.directory, directory, strict=True) or checkout_root(directory) != directory:
+            raise WorkmuxError("This checkout no longer belongs beneath the selected workspace.")
+        source = self.pane(source_pane)
+        self.require_workspace(source.session)
+        if client is None:
+            clients = self.run("list-clients", "-t", source.session, "-F", "#{client_name}").splitlines()
+            if len(clients) != 1:
+                raise WorkmuxError("Checkout selection requires exactly one attached client in this session.")
+            client = clients[0]
+        window = self.checkout_tabs().get((session, directory))
+        if window is not None:
+            try:
+                usable = any(not pane.sidebar for pane in self.panes(session + ":" + window))
+            except WorkmuxError:
+                usable = False
+            if not usable:
+                window = None
+        if window is None:
+            content = self.run("new-window", "-d", "-t", session + ":", "-n", tmux_argument(Path(directory).name),
+                               "-c", tmux_argument(directory), "-P", "-F", "#{pane_id}")
+            window = self.pane(content).window
+            try:
+                self.run("set-option", "-w", "-t", window, "@workmux-checkout", json.dumps(directory))
+                self.add_sidebar(content)
+            except WorkmuxError:
+                self.run("kill-window", "-t", session + ":" + window)
+                raise
+        self.select_tab(session, window, source_pane, client)
 
     def toggle_sidebar(self, target: str) -> None:
         pane = self.pane(target)
@@ -363,7 +444,7 @@ class Tmux:
         self.require_workspace(pane.session)
         content = self.content(pane)
         created = self.run("split-window", "-h" if direction == "right" else "-v",
-                           "-t", content.id, "-c", content.directory, "-P", "-F", "#{pane_id}")
+                           "-t", content.id, "-c", tmux_argument(content.directory), "-P", "-F", "#{pane_id}")
         self.run("set-option", "-w", "-t", pane.window, "@workspace-last-content", created)
         return created
 

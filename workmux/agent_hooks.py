@@ -110,11 +110,14 @@ def run_hook(harness: str, pid: int) -> None:
         terminal = _interactive_terminal(harness, pid)
         if terminal is None:
             return
+        cwd = payload.get("cwd", "")
         if state in ("attention", "finished"):
-            cwd = payload.get("cwd", "")
             os.write(terminal, _notification(harness, state, cwd if isinstance(cwd, str) else ""))
+        args = ["workmux", "agent", "state", state, "--pane", pane, "--pid", str(pid)]
+        if isinstance(cwd, str) and os.path.isabs(cwd):
+            args.extend(["--root", cwd])
         subprocess.run(
-            ["workmux", "agent", "state", state, "--pane", pane, "--pid", str(pid)],
+            args,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=2, check=False,
         )

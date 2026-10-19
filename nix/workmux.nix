@@ -29,7 +29,7 @@ pkgs.python3Packages.buildPythonApplication {
   makeWrapperArgs = [ "--prefix" "PATH" ":" (pkgs.lib.makeBinPath [ pkgs.tmux ]) ];
   pythonImportsCheck = [
     "workmux" "workmux.cli" "workmux.sidebar" "workmux.bindings"
-    "workmux.integration" "workmux.plugins"
+    "workmux.integration" "workmux.plugins" "workmux.checkouts"
   ];
   doInstallCheck = true;
   postInstallCheck = ''

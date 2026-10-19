@@ -95,6 +95,85 @@ class TmuxIntegrationTests(unittest.TestCase):
         eventually(lambda: shows("✓"), "clean repository indicator did not return")
         self.assertEqual(self.tmux.pane(content.id).id, content.id)
 
+    @unittest.skipUnless(shutil.which("git"), "Git is optional")
+    def test_container_worktrees_lazy_tabs_root_grouping_and_safe_removal(self):
+        root = Path(self.temporary.name)
+        source = root / 'source'
+        job = root / 'job'
+        source.mkdir()
+        job.mkdir()
+        linked = job / 'trees' / 'org' / "api ' $;"
+        linked.parent.mkdir(parents=True)
+        environment = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1')
+
+        def git(*args):
+            subprocess.run(['git', '-C', str(source), *args], env=environment, check=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        git('init', '-b', 'main')
+        git('config', 'user.name', 'Workmux Test')
+        git('config', 'user.email', 'test@example.invalid')
+        git('commit', '--allow-empty', '-m', 'initial')
+        git('worktree', 'add', '-b', 'feature', str(linked))
+        session = self.tmux.new_workspace('job', str(job))
+        original = self.tmux.pane(session + ':')
+        sidebar = next(pane for pane in self.tmux.panes(original.window) if pane.sidebar)
+        self.attach(session)
+        capture = lambda: self.tmux.run('capture-pane', '-p', '-t', sidebar.id)
+        eventually(lambda: "⎇ trees/org/api ' $; ✓" in capture(), 'linked worktree was not discovered', timeout=10)
+        self.assertEqual(len(self.tmux.run('list-windows', '-t', session).splitlines()), 1)
+        self.tmux.toggle_sidebar(original.id)
+        self.tmux.run('send-keys', '-t', sidebar.id, 'Down', 'Enter')
+        try:
+            content = eventually(lambda: (pane if (pane := self.tmux.pane(session + ':')).directory == str(linked)
+                                         and not pane.sidebar else None), 'checkout tab was not opened')
+        except AssertionError:
+            self.fail(f'Checkout tab was not opened:\n{capture()}\n{self.tmux.pane(session + ":")}')
+        self.assertEqual(self.tmux.checkout_tabs()[(session, str(linked))], content.window)
+        self.assertEqual(len(self.tmux.workspaces()), 1)
+        self.tmux.run('rename-window', '-t', content.window, 'renamed')
+        self.tmux.select_checkout(session, str(linked), original.id)
+        self.assertEqual(self.tmux.pane(session + ':').window, content.window)
+        self.assertEqual(len(self.tmux.run('list-windows', '-t', session).splitlines()), 2)
+        self.tmux.report_agent_state(content.id, 'working', os.getpid(), str(linked))
+        self.tmux.select_tab(session, original.window, content.id)
+        eventually(lambda: '     └─ ⣷' in capture() or any('     └─ ' + frame in capture()
+                                                        for frame in BRAILLE_WHEEL),
+                   'agent tab was not nested below its checkout')
+        git('worktree', 'remove', '--force', str(linked))
+        eventually(lambda: '⎇ trees/org/' not in capture(), 'removed checkout remained listed', timeout=12)
+        self.assertEqual(self.tmux.pane(content.id).window, content.window)
+        self.assertTrue(pane_contains_any(self.tmux, sidebar.id, BRAILLE_WHEEL))
+        with self.assertRaises(WorkmuxError):
+            self.tmux.select_checkout(session, str(linked), original.id)
+        self.assertEqual(len(self.tmux.run('list-windows', '-t', session).splitlines()), 2)
+
+    @unittest.skipUnless(shutil.which("git"), "Git is optional")
+    def test_checkout_selection_rechecks_containment_and_native_tab_lifecycle(self):
+        session, original, _ = self.workspace()
+        directory = Path(self.temporary.name) / 'repo'
+        directory.mkdir()
+        subprocess.run(['git', 'init', '-b', 'main', str(directory)], check=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       env=dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1'))
+        self.attach(session)
+        self.tmux.select_checkout(session, str(directory), original.id)
+        content = self.tmux.pane(session + ':')
+        window = content.window
+        self.tmux.run('kill-window', '-t', window)
+        self.tmux.select_checkout(session, str(directory), original.id)
+        self.assertNotEqual(self.tmux.pane(session + ':').window, window)
+        with self.assertRaisesRegex(WorkmuxError, 'beneath'):
+            self.tmux.select_checkout(session, self.temporary.name, original.id)
+        plain = Path(self.temporary.name) / 'plain'
+        plain.mkdir()
+        with self.assertRaisesRegex(WorkmuxError, 'beneath'):
+            self.tmux.select_checkout(session, str(plain), original.id)
+        other = self.tmux.new_workspace('other', str(plain))
+        self.tmux.select_checkout(session, str(directory), original.id)
+        self.assertEqual(len(self.tmux.workspaces()), 2)
+        self.assertEqual(self.tmux.pane(session + ':').directory, str(directory))
+
     def attach(self, session):
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))

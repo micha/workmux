@@ -71,9 +71,11 @@ class GitStatusCache:
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="workmux-git")
         self.entries: dict[str, _Entry] = {}
 
-    def snapshot(self, workspaces: list[Workspace]) -> dict[str, GitStatus | None]:
+    def snapshot(self, workspaces: list[Workspace],
+                 checkout_directories: tuple[str, ...] = ()) -> dict[str, GitStatus | None]:
         now = time.monotonic()
         directories = {workspace.directory for workspace in workspaces if workspace.directory}
+        directories.update(checkout_directories)
         for directory in self.entries.keys() - directories:
             self.entries.pop(directory).future.cancel()
         for directory in directories:
@@ -86,8 +88,10 @@ class GitStatusCache:
                 if now >= entry.next_poll:
                     entry.next_poll = now + POLL_INTERVAL
                     entry.future = self.executor.submit(probe_status, directory)
-        return {workspace.id: self.entries[workspace.directory].state
-                if workspace.directory in self.entries else None for workspace in workspaces}
+        snapshot = {workspace.id: self.entries[workspace.directory].state
+                    if workspace.directory in self.entries else None for workspace in workspaces}
+        snapshot.update((directory, self.entries[directory].state) for directory in checkout_directories)
+        return snapshot
 
     def close(self) -> None:
         self.executor.shutdown(wait=False, cancel_futures=True)

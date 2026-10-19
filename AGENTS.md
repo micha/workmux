@@ -28,6 +28,9 @@
   for the optional isolated-server workflow.
 - `workmux/layouts.py`: pure geometry and portable tmux layout serialization.
 - `workmux/sidebar.py`: terminal rendering and workspace navigation.
+- `workmux/checkouts.py`: bounded, read-only background discovery of Git checkouts
+  and linked worktrees beneath saved workspace directories, including plain
+  containers. Do not follow discovered directory symlinks or scan checkout content.
 - `workmux/git_status.py`: optional, local-only Git probes and nonblocking sidebar
   cache. Use saved workspace directories, preserve filenames as opaque porcelain
   records, and never fetch or take optional index locks.
@@ -69,6 +72,11 @@
   IDs and dead panes. Attention/finished states classify pending native alerts;
   hide them when alerts are cleared, while working stays visible independently.
   Preserve tmux's native alert monitoring/clearing behavior.
+- Checkout rows use stable session IDs and checkout paths; associated tabs use
+  explicit window metadata, never shell cwd or branch names. Open tabs lazily,
+  revalidate containment before opening, and never destroy content on checkout removal.
+  Group agent-state tabs only when all live reported harness roots resolve to the
+  same discovered checkout; unknown or mixed roots remain at workspace level.
 - Tree rows and click targets use stable session/window IDs, not rendered indexes
   or names. Prefer attention over working over finished when agents share a tab.
 - Pi state reports must be serialized and best-effort so a missing workmux command

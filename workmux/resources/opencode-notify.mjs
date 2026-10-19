@@ -1,6 +1,6 @@
 /* Local OpenCode TUI lifecycle reports; no configuration or dependencies needed. */
 import { execFile } from "node:child_process";
-import { basename } from "node:path";
+import { basename, isAbsolute } from "node:path";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
@@ -17,11 +17,14 @@ export default async function WorkmuxPlugin({ client, directory }) {
   let reports = Promise.resolve();
   let reported;
 
-  async function report(state) {
-    if (state === reported) return;
-    await exec("workmux", ["agent", "state", state, "--pane", process.env.TMUX_PANE,
-                          "--pid", String(process.pid)], { timeout: 2000 }).catch(() => {});
-    reported = state;
+  async function report(state, directories) {
+    const identity = JSON.stringify([state, directories || []]);
+    if (identity === reported) return;
+    const args = ["agent", "state", state, "--pane", process.env.TMUX_PANE,
+                  "--pid", String(process.pid)];
+    for (const root of directories || []) args.push("--root", root);
+    await exec("workmux", args, { timeout: 2000 }).catch(() => {});
+    reported = identity;
   }
 
   function notify(state) {
@@ -36,16 +39,18 @@ export default async function WorkmuxPlugin({ client, directory }) {
     if (!roots.has(id)) {
       const result = await client.session.get({ path: { id } }).catch(() => undefined);
       if (!result?.data) return false;
-      roots.set(id, !result.data.parentID);
+      roots.set(id, result.data);
     }
-    return roots.get(id);
+    return !roots.get(id).parentID;
   }
 
   async function handle(event) {
     const p = event.properties || {};
     const id = p.sessionID;
     if (!id || !await isRoot(id)) return;
-    const session = sessions.get(id) || { state: "idle", pending: new Set() };
+    const root = roots.get(id).directory;
+    const session = sessions.get(id) || { state: "idle", pending: new Set(),
+                                         root: typeof root === "string" && isAbsolute(root) ? root : undefined };
     const before = session.pending.size ? "attention" : session.state;
     if (event.type === "session.status" && ["busy", "retry"].includes(p.status?.type)) {
       session.state = "working";
@@ -68,8 +73,11 @@ export default async function WorkmuxPlugin({ client, directory }) {
     const state = session.pending.size ? "attention" : session.state;
     if (state === "attention" && (before !== "attention" || event.type.endsWith(".asked"))) notify(state);
     if (state === "finished" && before !== "finished") notify(state);
-    const states = [...sessions.values()].map(s => s.pending.size ? "attention" : s.state);
-    await report(["attention", "working", "finished"].find(s => states.includes(s)) || "idle");
+    const active = [...sessions.values()].filter(s => s.pending.size || s.state !== "idle");
+    const states = active.map(s => s.pending.size ? "attention" : s.state);
+    const directories = [...new Set(active.map(s => s.root))];
+    const knownRoots = directories.every(root => typeof root === "string") ? directories.sort() : undefined;
+    await report(["attention", "working", "finished"].find(s => states.includes(s)) || "idle", knownRoots);
   }
 
   reports = reports.then(() => report("idle")).catch(() => {});

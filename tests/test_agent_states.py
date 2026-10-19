@@ -100,10 +100,57 @@ class AgentStateTests(unittest.TestCase):
         with patch.object(Tmux, "pane", return_value=sidebar), self.assertRaisesRegex(WorkmuxError, "sidebar"):
             tmux.report_agent_state("%4", "working")
 
+    def test_roots_aggregate_all_live_agents_independently_of_display_priority(self):
+        def line(pane, state, root=None, pid=None, dead='0'):
+            report = {'state': state}
+            if root is not None:
+                report['root'] = root
+            if pid is not None:
+                report['pid'] = pid
+            return f'$1\t@1\t1\t!\t{pane}\t\t{dead}\t{json.dumps(report)}\twork'
+
+        output = '\n'.join([line('%1', 'attention', '/job/api'),
+                            line('%2', 'working', '/job/ui'),
+                            line('%3', 'finished'),
+                            line('%4', 'working', '/stale', 123),
+                            line('%5', 'working', '/dead', dead='1')])
+        with patch.object(Tmux, 'run', return_value=output) as run, \
+                patch('workmux.core.os.kill', side_effect=ProcessLookupError):
+            tab = Tmux().attention_tabs()[0]
+        self.assertEqual(tab.state, 'attention')
+        self.assertEqual(tab.roots, ('/job/api', '/job/ui', None))
+        self.assertEqual(run.call_count, 1)
+
+    def test_multiple_root_sessions_in_one_pane_are_reported_and_snapshotted(self):
+        pane = Pane('%4', '$0', '@0', False, True, 95, 120, False, '/shell')
+        with patch.object(Tmux, 'pane', return_value=pane), patch.object(Tmux, 'run') as run:
+            Tmux().report_agent_state('%4', 'working', root=['/job/api', '/job/api/src', '/job/api'])
+            report = json.loads(run.call_args.args[5])
+        self.assertEqual(report, {'state': 'working', 'roots': ['/job/api', '/job/api/src']})
+        line = '$0\t@0\t1\t*\t%4\t\t0\t' + json.dumps(report) + '\twork'
+        with patch.object(Tmux, 'run', return_value=line):
+            self.assertEqual(Tmux().attention_tabs()[0].roots, ('/job/api', '/job/api/src'))
+        with patch('workmux.cli.Tmux') as tmux:
+            self.assertEqual(main(['agent', 'state', 'working', '--pane', '%4',
+                                   '--root', '/job/api', '--root', '/job/ui']), 0)
+            tmux.return_value.report_agent_state.assert_called_once_with(
+                '%4', 'working', None, ['/job/api', '/job/ui'])
+
+    def test_root_is_explicit_absolute_metadata_and_cli_forwards_it(self):
+        pane = Pane('%4', '$0', '@0', False, True, 95, 120, False, '/unrelated-shell')
+        with patch.object(Tmux, 'pane', return_value=pane), patch.object(Tmux, 'run') as run:
+            Tmux().report_agent_state('%4', 'working', root='/job/repo/src/..')
+            self.assertEqual(json.loads(run.call_args.args[5]), {'state': 'working', 'root': '/job/repo'})
+            with self.assertRaisesRegex(WorkmuxError, 'absolute'):
+                Tmux().report_agent_state('%4', 'working', root='relative')
+        with patch('workmux.cli.Tmux') as tmux:
+            self.assertEqual(main(['agent', 'state', 'working', '--pane', '%4', '--root', '/job/repo']), 0)
+            tmux.return_value.report_agent_state.assert_called_once_with('%4', 'working', None, '/job/repo')
+
     def test_cli_reports_state_and_requires_a_content_target(self):
         with patch("workmux.cli.Tmux") as tmux:
             self.assertEqual(main(["agent", "state", "working", "--pane", "%4", "--pid", "123"]), 0)
-            tmux.return_value.report_agent_state.assert_called_once_with("%4", "working", 123)
+            tmux.return_value.report_agent_state.assert_called_once_with("%4", "working", 123, None)
         with patch.dict(os.environ, {}, clear=True), patch("sys.stderr", new_callable=io.StringIO) as stderr:
             self.assertEqual(main(["agent", "state", "idle"]), 1)
             self.assertIn("--pane", stderr.getvalue())
