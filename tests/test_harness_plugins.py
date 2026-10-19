@@ -77,7 +77,10 @@ class HarnessPluginTests(unittest.TestCase):
             install_plugin(harness, str(root))
             spec = _FILES[harness][-1]
             target = root / spec.path
-            for content in (b"personal file", _content(spec) + b"\n", b"[]"):
+            contents = (b"personal file", _content(spec) + b"\n", b"[]")
+            if harness == "codex":
+                contents = (b"personal file", b"[]")  # Shared JSON tolerates reformatting.
+            for content in contents:
                 with self.subTest(harness=harness, content=content[:30]):
                     target.write_bytes(content)
                     self.assertIn("conflict", plugin_status(harness, str(root))[0])
@@ -239,7 +242,11 @@ class HarnessPluginTests(unittest.TestCase):
         for harness in ("codex", "claude"):
             spec = _FILES[harness][-1]
             data = json.loads(_content(spec))
-            self.assertIn("description", data)
+            if harness == "claude":
+                self.assertIn("description", data)
+            else:
+                self.assertTrue(all("description" in group for groups in data["hooks"].values()
+                                    for group in groups))
             self.assertIn("Stop", data["hooks"])
             for event, groups in data["hooks"].items():
                 self.assertNotIn(event, ("SubagentStart", "SubagentStop"))

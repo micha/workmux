@@ -1,4 +1,4 @@
-"""Explicit installation of owned agent integrations, independent of tmux."""
+"""Explicit installation of owned agent integration files and shared hook groups."""
 
 from dataclasses import dataclass
 import hashlib
@@ -64,6 +64,12 @@ def pi_agent_dir(directory: str | None = None) -> Path:
 
 def _content(spec: _File) -> bytes:
     body = files("workmux").joinpath("resources", spec.resource).read_bytes()
+    if spec.kind == "codex-hooks":
+        data = json.loads(body)
+        for event, groups in data["hooks"].items():
+            for group in groups:
+                group["description"] = _codex_marker(event, group)
+        return _json_content(data)
     if spec.resource.endswith(".json"):
         # A schema-supported description carries a checksum of the exact file,
         # with the checksum itself zeroed. Formatting edits also invalidate it.
@@ -73,6 +79,112 @@ def _content(spec: _File) -> bytes:
         return content.replace(_ZERO_HASH.encode(), hashlib.sha256(content).hexdigest().encode(), 1)
     digest = hashlib.sha256(body).hexdigest()
     return f"// workmux-managed: {spec.kind} sha256={digest}\n".encode() + body
+
+
+def _json_content(data: dict) -> bytes:
+    return (json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False) + "\n").encode()
+
+
+def _codex_marker(event: str, group: dict) -> str:
+    """Checksum a matcher group and its event, independent of JSON formatting."""
+    payload = {"event": event, "group": {key: value for key, value in group.items()
+                                         if key != "description"}}
+    canonical = json.dumps(payload, sort_keys=True, ensure_ascii=False,
+                           separators=(",", ":"), allow_nan=False).encode()
+    return "workmux-managed: codex-hooks sha256=" + hashlib.sha256(canonical).hexdigest()
+
+
+def _unique_object(pairs: list) -> dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _codex_parts(content: bytes | None) -> tuple[dict, dict, bool]:
+    """Separate verified owned groups from shared configuration; never claim commands."""
+    if content is None:
+        return {}, {}, False
+    # Migrate intact, older whole-file installations. Edited legacy files remain
+    # conflicts: their checksum cannot establish which additions are personal.
+    if _owned(content, "codex-hooks", json_file=True):
+        return {}, {}, True
+    try:
+        data = json.loads(content, object_pairs_hook=_unique_object,
+                          parse_constant=lambda value: _invalid_constant(value))
+        if not isinstance(data, dict):
+            raise ValueError("expected a JSON object")
+        description = data.get("description", "")
+        if isinstance(description, str) and description.startswith("workmux-managed: codex-hooks"):
+            raise ValueError("edited legacy workmux file")
+        hooks = data.get("hooks", {})
+        if not isinstance(hooks, dict):
+            raise ValueError("expected a hooks object")
+        remaining, owned = {}, {}
+        for event, groups in hooks.items():
+            if not isinstance(groups, list):
+                raise ValueError("expected hook group arrays")
+            kept = []
+            for group in groups:
+                if not isinstance(group, dict) or not isinstance(group.get("hooks", []), list):
+                    raise ValueError("expected matcher groups with hooks arrays")
+                if any(not isinstance(hook, dict) for hook in group.get("hooks", [])):
+                    raise ValueError("expected hook objects")
+                marker = group.get("description", "")
+                if isinstance(marker, str) and marker.startswith("workmux-managed: codex-hooks"):
+                    if marker != _codex_marker(event, group):
+                        raise ValueError("edited workmux hook group")
+                    owned.setdefault(event, []).append(group)
+                else:
+                    kept.append(group)
+            if kept or not groups:
+                remaining[event] = kept
+        residual = dict(data)
+        if "hooks" in data:
+            residual["hooks"] = remaining
+        return residual, owned, False
+    except (ValueError, UnicodeError) as error:
+        raise WorkmuxError(f"Refusing to modify unowned or edited Codex hooks: {error}") from error
+
+
+def _invalid_constant(value: str):
+    raise ValueError(f"invalid JSON constant: {value}")
+
+
+def _codex_existing(target: Path) -> bytes | None:
+    if _symlink(target) is not None:
+        raise WorkmuxError(f"Refusing to modify symlink: {target}")
+    try:
+        return target.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def _codex_change(root: Path, *, remove: bool) -> str:
+    target = root / "hooks.json"
+    existing = _codex_existing(target)
+    try:
+        residual, owned, legacy = _codex_parts(existing)
+    except WorkmuxError as error:
+        raise WorkmuxError(f"{error}: {target}") from error
+    desired = json.loads(_content(_FILES["codex"][0]))["hooks"]
+    changed = bool(owned or legacy) if remove else legacy or owned != desired
+    if changed:
+        if not remove:
+            hooks = residual.setdefault("hooks", {})
+            for event, groups in desired.items():
+                hooks.setdefault(event, []).extend(groups)
+        if remove and (not residual or residual == {"hooks": {}}):
+            if _symlink(target) is not None or target.read_bytes() != existing:
+                raise WorkmuxError(f"Agent integration changed during removal: {target}")
+            target.unlink()
+        else:
+            _write(target, _json_content(residual), existing)
+    prefix = ("Removed" if changed else "Not installed") if remove else (
+        "Installed" if changed else "Already installed")
+    return f"{prefix}: {target}. {_RELOAD['codex']}"
 
 
 def pi_extension() -> bytes:
@@ -139,6 +251,19 @@ def plugin_status(harness: str, directory: str | None = None) -> tuple[str, Path
             continue
         except IsADirectoryError:
             return "conflict (directory)", target
+        if harness == "codex":
+            try:
+                _, owned, legacy = _codex_parts(content)
+            except WorkmuxError:
+                return "conflict (unowned or edited file)", target
+            if legacy:
+                return "installed (update available)", target
+            if not owned:
+                return "not installed", target
+            desired = json.loads(_content(spec))["hooks"]
+            if set(desired) - set(owned):
+                return "installed (incomplete)", target
+            return "installed" if owned == desired else "installed (update available)", target
         if not _owned(content, spec.kind, json_file=target.suffix == ".json"):
             return "conflict (unowned or edited file)", target
         present += 1
@@ -167,6 +292,7 @@ def _write(target: Path, content: bytes, existing: bytes | None) -> None:
         with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".workmux-", delete=False) as output:
             temporary = Path(output.name)
             output.write(content)
+            os.fchmod(output.fileno(), target.stat().st_mode & 0o777)
         if _symlink(target) is not None or target.read_bytes() != existing:
             raise WorkmuxError(f"Agent integration changed during installation: {target}")
         temporary.replace(target)
@@ -177,6 +303,8 @@ def _write(target: Path, content: bytes, existing: bytes | None) -> None:
 
 def install_plugin(harness: str, directory: str | None = None) -> str:
     root = agent_dir(harness, directory)
+    if harness == "codex":
+        return _codex_change(root, remove=False)
     # Preflight every file before writing any: a conflict must not replace a
     # manifest and only then discover edited hooks elsewhere in the bundle.
     plan = [(root / spec.path, _content(spec), _existing(root / spec.path, spec.kind))
@@ -192,6 +320,8 @@ def install_plugin(harness: str, directory: str | None = None) -> str:
 
 def uninstall_plugin(harness: str, directory: str | None = None) -> str:
     root = agent_dir(harness, directory)
+    if harness == "codex":
+        return _codex_change(root, remove=True)
     plan = [(root / spec.path, _existing(root / spec.path, spec.kind)) for spec in _FILES[harness]]
     removed = False
     for target, existing in plan:

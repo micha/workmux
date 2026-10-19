@@ -336,11 +336,11 @@ executables or confirm that an integration is loaded in a running session.
 `workmux` must be on the harness's `PATH`. Installation does not change tmux
 preferences, harness settings, hook trust decisions, or project configuration.
 
-| Harness | Owned files under its personal configuration directory | Directory override |
+| Harness | Managed files or entries under its personal configuration directory | Directory override |
 | --- | --- | --- |
 | Pi | `extensions/workmux-notify.ts` under `~/.pi/agent` | `PI_CODING_AGENT_DIR` |
 | OpenCode | `plugins/workmux-notify.js` under `~/.config/opencode` | `OPENCODE_CONFIG_DIR`; otherwise `XDG_CONFIG_HOME/opencode` |
-| Codex | `hooks.json` under `~/.codex` | `CODEX_HOME` |
+| Codex | Workmux hook groups in `hooks.json` under `~/.codex` | `CODEX_HOME` |
 | Claude Code | `skills/workmux/.claude-plugin/plugin.json` and `skills/workmux/hooks/hooks.json` under `~/.claude` | `CLAUDE_CONFIG_DIR` |
 
 Use `--agent-dir PATH` to override the selected harness's personal directory.
@@ -386,10 +386,15 @@ not supported. Reports are serialized and best-effort.
 
 Codex discovers the personal `hooks.json` automatically. Restart Codex and approve
 the workmux hooks in `/hooks`; hooks must be enabled. Workmux never grants trust
-or changes `config.toml`. **If you already have an unowned `hooks.json`, installation
-refuses to overwrite or merge it.** Keep your existing hooks; integrating the
-bundled commands manually is an alternative, but manually edited files will not
-be managed by workmux.
+or changes `config.toml`. Installation merges workmux's hook groups into an existing
+`hooks.json`, preserving unrelated hooks, matchers, and top-level settings. Each
+workmux group carries its own checksum; unrelated edits and JSON reformatting do
+not prevent updates. Uninstall removes only verified workmux groups, leaving shared
+configuration in place (or deleting the file if only workmux's hooks remained).
+Invalid/ambiguous JSON and edited workmux groups are conflicts and are left untouched.
+Manually added, unmarked commands are not adopted; remove duplicate workmux commands
+yourself before installing. Intact older whole-file workmux installations migrate
+automatically; edited legacy installations still require manual reconciliation.
 
 Claude Code auto-loads `skills/workmux` as the `workmux@skills-dir` plugin. This
 installation mode requires Claude Code 2.1.223 or newer. Run `/reload-plugins` or
@@ -464,13 +469,14 @@ nested tmux is not supported by these integrations.
 
 ### Installation safety
 
-The commands manage only the owned files listed above. Installation is idempotent
-and updates intact older workmux copies. Symlinked configuration directories are
-supported and their links are left unchanged. Both operations refuse symlinks at
-the managed file paths and files whose workmux checksum is missing or no
-longer matches; move an edited/conflicting file aside manually first. For bundles,
-all files are checked before any are changed. Unrelated files, extensions, and
-settings are preserved. Uninstalling a missing integration creates no directories.
+The commands manage only the files or Codex hook groups listed above. Installation
+is idempotent and updates intact older workmux copies. Symlinked configuration
+directories are supported and their links are left unchanged. Both operations
+refuse symlinks at managed file paths. Except for Codex's shared `hooks.json`, files
+whose workmux checksum is missing or no longer matches are conflicts; reconcile
+edited/conflicting integrations manually first. For bundles, all files are checked
+before any are changed. Unrelated files, hooks, extensions, and settings are
+preserved. Uninstalling a missing integration creates no directories.
 
 If another integration already sends notifications, disable it before enabling
 this one to avoid duplicates. Workmux deliberately leaves other integrations alone.

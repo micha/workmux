@@ -188,6 +188,11 @@ class NativePluginTests(unittest.TestCase):
         version = self.run_cli(["codex", "--version"]).stdout.strip().split()[-1]
         if tuple(int(part) for part in version.split(".")[:3]) < (0, 146, 0):
             self.skipTest("Native hooks/discovery validation needs Codex 0.146.0+")
+        config = self.root / "codex"
+        config.mkdir()
+        (config / "hooks.json").write_text(json.dumps({"hooks": {"Stop": [
+            {"matcher": "", "hooks": [{"type": "command", "command": "echo personal"}]}
+        ]}}))
         install_plugin("codex", self.env["CODEX_HOME"])
         process = subprocess.Popen(["codex", "app-server"], cwd=self.root, env=self.env,
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -228,9 +233,11 @@ class NativePluginTests(unittest.TestCase):
             self.assertEqual(entry["warnings"], [])
             hooks = [hook for hook in entry["hooks"]
                      if hook["sourcePath"] == str(self.root / "codex" / "hooks.json")]
-            self.assertEqual(len(hooks), 7)
+            self.assertEqual(len(hooks), 8)
             self.assertTrue(all(hook["trustStatus"] == "untrusted" for hook in hooks))
-            self.assertTrue(all(hook["command"].startswith("workmux agent hook codex") for hook in hooks))
+            self.assertEqual(sum(hook["command"].startswith("workmux agent hook codex")
+                                 for hook in hooks), 7)
+            self.assertEqual(sum(hook["command"] == "echo personal" for hook in hooks), 1)
         finally:
             process.stdin.close()
             try:
