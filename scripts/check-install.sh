@@ -23,11 +23,25 @@ path = Path(workmux.__file__).resolve()
 assert Path(sys.prefix).resolve() in path.parents, f"Not using installed package: {path}"
 print(f"Testing installed package: {path}")'
 # Exercise plugin resources through the installed console script, outside checkout.
-PI_CODING_AGENT_DIR="$root/pi-agent" "$PIPX_BIN_DIR/workmux" install | grep -F 'not installed'
+PI_CODING_AGENT_DIR="$root/pi-agent" "$PIPX_BIN_DIR/workmux" install --agent-dir "$root/pi-agent" | grep -F 'not installed'
 test ! -e "$root/pi-agent"
 PI_CODING_AGENT_DIR="$root/pi-agent" "$PIPX_BIN_DIR/workmux" install pi
 test -f "$root/pi-agent/extensions/workmux-notify.ts"
-PI_CODING_AGENT_DIR="$root/pi-agent" "$PIPX_BIN_DIR/workmux" install | grep -F 'installed'
+PI_CODING_AGENT_DIR="$root/pi-agent" "$PIPX_BIN_DIR/workmux" install --agent-dir "$root/pi-agent" | grep -F 'installed'
 PI_CODING_AGENT_DIR="$root/pi-agent" "$PIPX_BIN_DIR/workmux" uninstall pi
 test ! -e "$root/pi-agent/extensions/workmux-notify.ts"
+for harness in opencode codex claude; do
+  agent_dir="$root/$harness-agent"
+  "$PIPX_BIN_DIR/workmux" install "$harness" --agent-dir "$agent_dir"
+  "$PIPX_BIN_DIR/workmux" install --agent-dir "$agent_dir" | grep -E "^[[:space:]]*$harness[[:space:]]+installed[[:space:]]"
+  case "$harness" in
+    opencode) test -f "$agent_dir/plugins/workmux-notify.js" ;;
+    codex) test -f "$agent_dir/hooks.json" ;;
+    claude)
+      test -f "$agent_dir/skills/workmux/.claude-plugin/plugin.json"
+      test -f "$agent_dir/skills/workmux/hooks/hooks.json" ;;
+  esac
+  "$PIPX_BIN_DIR/workmux" uninstall "$harness" --agent-dir "$agent_dir"
+  "$PIPX_BIN_DIR/workmux" install --agent-dir "$agent_dir" | grep -E "^[[:space:]]*$harness[[:space:]]+not installed[[:space:]]"
+done
 "$python" -m unittest discover -s "$project_dir/tests" -v

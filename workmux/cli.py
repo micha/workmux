@@ -9,6 +9,7 @@ import sys
 
 from .core import AGENT_STATES, Tmux, WorkmuxError
 from .layouts import LAYOUTS
+from .plugins import HARNESSES
 
 
 def add_pane(parser: argparse.ArgumentParser) -> None:
@@ -26,9 +27,9 @@ def parser() -> argparse.ArgumentParser:
     for action, description in (("install", "List supported harnesses or install an agent plugin"),
                                 ("uninstall", "Remove an intact workmux agent plugin")):
         plugin = commands.add_parser(action, help=description)
-        plugin.add_argument("plugin", choices=("pi",), nargs="?" if action == "install" else None,
+        plugin.add_argument("plugin", choices=HARNESSES, nargs="?" if action == "install" else None,
                             help="Agent integration to manage (omit for install to list status)")
-        plugin.add_argument("--agent-dir", help="Pi personal directory (default: PI_CODING_AGENT_DIR or ~/.pi/agent)")
+        plugin.add_argument("--agent-dir", help="Override the selected harness's personal configuration directory")
 
     workspace = commands.add_parser("workspace", help="Create and list workspaces")
     actions = workspace.add_subparsers(dest="action", required=True)
@@ -71,6 +72,9 @@ def parser() -> argparse.ArgumentParser:
     state.add_argument("state", choices=AGENT_STATES)
     state.add_argument("--pid", type=int, help="Agent process ID; ignore stale reports after it exits")
     add_pane(state)
+    hook = agents.add_parser("hook", help="Internal best-effort Codex/Claude command hook")
+    hook.add_argument("harness", choices=("codex", "claude"))
+    hook.add_argument("--pid", required=True, type=int, help="Harness process ID supplied by its hook shell")
 
     enable = commands.add_parser("enable", help="Enable or reconcile workmux in an existing tmux session")
     enable.add_argument("--client", help="Invoking client; validates the source session when supplied")
@@ -111,13 +115,21 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
         if args.command in ("install", "uninstall"):
-            from .plugins import install_pi, pi_status, uninstall_pi
+            from .plugins import install_plugin, plugin_status, uninstall_plugin
             if args.command == "install" and args.plugin is None:
-                status, path = pi_status(args.agent_dir)
-                print(f"Supported harnesses:\n  pi\t{status}\t{path}")
+                entries = [(harness, *plugin_status(harness, args.agent_dir)) for harness in HARNESSES]
+                name_width = max(len(harness) for harness, _, _ in entries)
+                status_width = max(len(status) for _, status, _ in entries)
+                print("Supported harnesses:")
+                for harness, status, path in entries:
+                    print(f"  {harness:<{name_width}}  {status:<{status_width}}  {path}")
                 return 0
-            operation = install_pi if args.command == "install" else uninstall_pi
-            print(operation(args.agent_dir))
+            operation = install_plugin if args.command == "install" else uninstall_plugin
+            print(operation(args.plugin, args.agent_dir))
+            return 0
+        if args.command == "agent" and args.action == "hook":
+            from .agent_hooks import run_hook
+            run_hook(args.harness, args.pid)
             return 0
         socket = args.socket
         if not socket and not args.server and os.environ.get("TMUX"):

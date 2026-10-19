@@ -6,8 +6,9 @@ Workspaces are enabled sessions, tabs are tmux windows, and each window gets a
 left sidebar. The remaining area contains ordinary terminal panes.
 
 Workmux reads the **running configuration**, not your config files, and does not
-install startup hooks. The sidebar shows tmux alerts; an optional Pi integration
-adds agent-state indicators and desktop notifications when explicitly installed.
+install tmux startup hooks. The sidebar shows tmux alerts; optional Pi, OpenCode,
+Codex, and Claude Code integrations add agent-state indicators and desktop
+notifications when explicitly installed.
 
 ## Requirements
 
@@ -15,9 +16,9 @@ adds agent-state indicators and desktop notifications when explicitly installed.
 - tmux 3.3 or newer.
 - The installed `workmux` command must be on tmux's `PATH`.
 
-The Python package installs its Tree-sitter dependencies automatically. Pi is
-needed only for the optional agent integration; desktop notifications additionally
-require a compatible terminal.
+The Python package installs its Tree-sitter dependencies automatically. Agent
+harnesses are needed only for their optional integrations; desktop notifications
+additionally require a compatible terminal.
 
 ## Install
 
@@ -226,7 +227,7 @@ Agent states come from explicit reports, not from guessing which shell commands
 are agents. Dead agent processes are ignored when the integration supplies their
 process ID.
 
-Install the [Pi integration](#optional-pi-integration) for automatic agent reports.
+Install an [agent integration](#optional-agent-integrations) for automatic reports.
 Native tmux alerts need no agent integration; their monitoring settings remain
 your responsibility.
 
@@ -315,20 +316,37 @@ After detaching, remove only the demonstration server with:
 tmux -L workmux-demo kill-server
 ```
 
-## Optional Pi integration
+## Optional agent integrations
 
-Install the bundled personal extension on the machine where Pi runs:
+Install an integration on the machine where its harness runs:
 
 ```sh
-workmux install       # List supported harnesses and installation status
+workmux install       # Read-only listing of supported harnesses and disk status
 workmux install pi
-# Later, to remove it:
-workmux uninstall pi
+workmux install opencode
+workmux install codex
+workmux install claude
+# Remove an integration with the corresponding command, for example:
+workmux uninstall codex
 ```
 
-The listing is read-only and reports the managed extension's on-disk status,
-including conflicts and available updates. It does not detect whether Pi itself
-is installed or whether the extension is enabled in a running session.
+Only install the integrations you use. The listing reports conflicts, incomplete
+installations, and available updates; it does not detect installed harness
+executables or confirm that an integration is loaded in a running session.
+`workmux` must be on the harness's `PATH`. Installation does not change tmux
+preferences, harness settings, hook trust decisions, or project configuration.
+
+| Harness | Owned files under its personal configuration directory | Directory override |
+| --- | --- | --- |
+| Pi | `extensions/workmux-notify.ts` under `~/.pi/agent` | `PI_CODING_AGENT_DIR` |
+| OpenCode | `plugins/workmux-notify.js` under `~/.config/opencode` | `OPENCODE_CONFIG_DIR`; otherwise `XDG_CONFIG_HOME/opencode` |
+| Codex | `hooks.json` under `~/.codex` | `CODEX_HOME` |
+| Claude Code | `skills/workmux/.claude-plugin/plugin.json` and `skills/workmux/hooks/hooks.json` under `~/.claude` | `CLAUDE_CONFIG_DIR` |
+
+Use `--agent-dir PATH` to override the selected harness's personal directory.
+With no harness specified, the same override is used for each status entry.
+
+### Pi integration
 
 Run `/reload` in Pi after installing or uninstalling. Test with
 `/workmux-notify-test`, then switch away from your terminal within three seconds.
@@ -350,6 +368,59 @@ Sidebar state reporting does not require terminal notification support or tmux
 passthrough. Pi calls `workmux` on its PATH to report state in its own tmux pane;
 a missing command or reporting failure does not stop the agent.
 
+### OpenCode integration
+
+Restart the local OpenCode TUI after installation/removal. Its global plugin
+loader discovers the bundled JavaScript file automatically; no npm dependencies
+or config entries are added. Busy/retry events report working, permission and
+question dialogs report attention, and idle after a run reports finished. Errors
+report attention, and answering/dismissing dialogs restores the underlying state.
+Subagent sessions are ignored; multiple root sessions prefer attention over
+working over finished. Startup idle events do not send completion notifications.
+
+The integration is for the local, terminal-attached TUI. Headless `run`, `serve`,
+`web`, `acp`, and debug invocations are ignored; attaching to a remote server is
+not supported. Reports are serialized and best-effort.
+
+### Codex and Claude Code integrations
+
+Codex discovers the personal `hooks.json` automatically. Restart Codex and approve
+the workmux hooks in `/hooks`; hooks must be enabled. Workmux never grants trust
+or changes `config.toml`. **If you already have an unowned `hooks.json`, installation
+refuses to overwrite or merge it.** Keep your existing hooks; integrating the
+bundled commands manually is an alternative, but manually edited files will not
+be managed by workmux.
+
+Claude Code auto-loads `skills/workmux` as the `workmux@skills-dir` plugin. This
+installation mode requires Claude Code 2.1.223 or newer. Run `/reload-plugins` or
+restart Claude Code after installation/removal. No marketplace registration or
+`settings.json` changes are needed. Do not also load this plugin with `--plugin-dir`,
+as that can duplicate its hooks.
+
+Both integrations report working on user prompts/tool hooks, attention on
+permission requests and blocking question tools, finished on `Stop`, and idle
+on session start/end. Claude also handles permission/elicitation notifications.
+After a permission prompt, working resumes at the next tool lifecycle hook, not
+necessarily at the instant approval is granted. Child-agent hooks are ignored.
+`Stop` means the harness stopped, not that the task succeeded; another stop hook
+can still cause it to continue. Errors and interruptions without a corresponding
+hook event are not classified separately. Closed agent processes are ignored
+through their recorded harness PID, not the short-lived hook process's PID.
+
+Command hooks receive piped stdout, so verifying a real interactive terminal
+currently requires **Linux procfs**. The handler verifies the harness's controlling
+terminal and foreground process group, then writes through its terminal stdout
+descriptor; it does not require the hook process itself to have a controlling
+terminal (Claude launches detached hook sessions). Reporting and notifications are skipped if
+the harness is headless, remote, backgrounded, has redirected stdout, or its
+foreground terminal cannot be verified. Hook stdout stays empty: these commands
+never approve permissions, block completion, or emit hook-protocol decisions.
+Reporting has a two-second timeout; missing workmux or a closed pane is best-effort.
+
+Discovery/schema checks were validated with OpenCode 1.18.34, Codex 0.146.0, and
+Claude Code 2.1.223 on Linux. Tests also cover event payloads and private tmux
+state reporting; model-backed end-to-end sessions have not been validated.
+
 ### Other agent integrations
 
 Other harnesses can report state explicitly from their tmux content pane:
@@ -365,7 +436,7 @@ Use `--pane PANE_ID` for an explicit target and `--pid PID` to tie the report to
 the agent process's lifetime. Reports can be made before enabling workmux, but
 only enabled workspaces display them. Working reports show immediately; attention
 and finished reports classify pending tmux alerts, so also emit a bell or another
-monitored alert when reporting those states. The Pi integration sends a bell
+monitored alert when reporting those states. The bundled integrations send a bell
 automatically. There is one report per pane; agents in separate panes are
 aggregated into their tab's indicator.
 
@@ -373,7 +444,7 @@ aggregated into their tab's indicator.
 
 Desktop notifications require a terminal that supports **OSC 9 notifications**.
 Enable notifications in that terminal's settings and allow them in your desktop's
-notification settings. The extension also sends a separate bell for tmux's
+notification settings. The integrations also send a separate bell for tmux's
 status-bar alert, which requires `monitor-bell on`.
 
 Inside tmux, enable notification passthrough yourself:
@@ -389,20 +460,20 @@ only with trusted workloads. Workmux does not change these settings for you.
 Over SSH, configure passthrough on the machine running tmux and notification
 permissions on your local desktop. Notifications travel through the terminal
 connection; no desktop forwarding is needed. A terminal must remain attached;
-nested tmux is not supported by this extension.
+nested tmux is not supported by these integrations.
 
 ### Installation safety
 
-The commands manage only `extensions/workmux-notify.ts` under `~/.pi/agent`, or
-`PI_CODING_AGENT_DIR` when set. Use `--agent-dir PATH` to override that location.
-They do not modify Pi settings, project extensions, or other extensions.
-Installation is idempotent and updates intact older workmux copies. Both commands
-refuse symlinks and files whose workmux checksum is missing or no longer matches;
-move an edited/conflicting file aside manually first. Uninstalling a missing
-extension is a no-op.
+The commands manage only the owned files listed above. Installation is idempotent
+and updates intact older workmux copies. Symlinked configuration directories are
+supported and their links are left unchanged. Both operations refuse symlinks at
+the managed file paths and files whose workmux checksum is missing or no
+longer matches; move an edited/conflicting file aside manually first. For bundles,
+all files are checked before any are changed. Unrelated files, extensions, and
+settings are preserved. Uninstalling a missing integration creates no directories.
 
-If another Pi extension already sends notifications, disable it before enabling
-this one to avoid duplicates. Workmux deliberately leaves other extensions alone.
+If another integration already sends notifications, disable it before enabling
+this one to avoid duplicates. Workmux deliberately leaves other integrations alone.
 
 ## Runtime and layout limits
 

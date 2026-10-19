@@ -32,9 +32,13 @@
   cache. Use saved workspace directories, preserve filenames as opaque porcelain
   records, and never fetch or take optional index locks.
 - `workmux/plugins.py`: explicit, safe installation/removal and status reporting
-  for bundled agent extensions.
-- `workmux/resources/pi-notify.ts`: Pi lifecycle state reports, notifications,
-  and tmux passthrough.
+  for bundled agent integrations, including checksum-verified JSON hook files.
+- `workmux/agent_hooks.py`: best-effort Codex/Claude command-hook handling. Keep
+  hook stdout empty, preserve native decisions/trust, and verify the harness's
+  foreground terminal before reporting or sending terminal payloads.
+- `workmux/resources/`: bundled Pi/OpenCode lifecycle extensions and Codex/Claude
+  hook/plugin JSON. Use native events and root-session identity, not transcripts
+  or guesses from tool output.
 - `workmux/cli.py`: argument parsing, socket inference, and error reporting.
 
 ## Behavioral contracts
@@ -96,6 +100,9 @@ python3 -m pip install -e .
 - The TypeScript notification tests use Node 24+ for native TypeScript loading.
   Without a suitable Node version they are skipped; check for skips when changing
   the extension. Node is not a workmux runtime dependency.
+- Optional native harness tests use temporary HOME/config/data/cache directories
+  and make no model calls. Validate plugin discovery, schemas, and native hook
+  trust without approving hooks or changing real harness settings.
 - Integration coverage has been exercised with tmux 3.6a on Linux. Do not imply
   other tmux versions, platforms, or terminal notification implementations have
   been validated without testing them.

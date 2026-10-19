@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "workmux agent hook codex --pid \"$PPID\" 2>/dev/null || true", "timeout": 5}]}],
+    "SessionEnd": [{"hooks": [{"type": "command", "command": "workmux agent hook codex --pid \"$PPID\" 2>/dev/null || true", "timeout": 3}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "workmux agent hook codex --pid \"$PPID\" 2>/dev/null || true", "timeout": 5}]}],
+    "PermissionRequest": [{"hooks": [{"type": "command", "command": "workmux agent hook codex --pid \"$PPID\" 2>/dev/null || true", "timeout": 5}]}],
+    "PreToolUse": [{"hooks": [{"type": "command", "command": "workmux agent hook codex --pid \"$PPID\" 2>/dev/null || true", "timeout": 5}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "workmux agent hook codex --pid \"$PPID\" 2>/dev/null || true", "timeout": 5}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "workmux agent hook codex --pid \"$PPID\" 2>/dev/null || true", "timeout": 5}]}]
+  }
+}

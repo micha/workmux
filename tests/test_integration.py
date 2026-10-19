@@ -11,6 +11,7 @@ import shutil
 import signal
 import struct
 import subprocess
+import sys
 import tempfile
 import termios
 import threading
@@ -1098,6 +1099,49 @@ class TmuxIntegrationTests(unittest.TestCase):
         eventually(lambda: self.tmux.pane(second + ":").id == attention)
         self.assertEqual(self.tmux.pane(second + ":").window, target)
         self.assertEqual(next(tab.state for tab in self.tmux.attention_tabs() if tab.id == target), "working")
+
+    @unittest.skipUnless(Path("/proc/self/fd").exists(), "command-hook TTY verification needs Linux procfs")
+    def test_command_hooks_report_live_harness_pid_in_private_tmux(self):
+        for harness in ("codex", "claude"):
+            with self.subTest(harness=harness):
+                session, content, _ = self.workspace(f"hooks-{harness}")
+                script = Path(self.temporary.name) / f"{harness}-hook-driver.py"
+                command = f'workmux agent hook {harness} --pid "$PPID" 2>/dev/null || true'
+                script.write_text(
+                    "import json, os, subprocess, sys\n"
+                    "print('HOOK-DRIVER-READY', flush=True)\n"
+                    "for line in sys.stdin:\n"
+                    "    event = line.strip()\n"
+                    "    if event == 'quit': break\n"
+                    "    payload = {'hook_event_name': event, 'cwd': os.getcwd()}\n"
+                    f"    subprocess.run(['/bin/sh', '-c', {command!r}], input=json.dumps(payload), text=True, start_new_session={harness == 'claude'!r})\n"
+                    "    print('HOOK-DONE-' + event, flush=True)\n"
+                )
+                self.attach(session)
+                self.tmux.run("send-keys", "-t", content.id,
+                              shlex.join([sys.executable, str(script)]), "Enter")
+                eventually(lambda: "HOOK-DRIVER-READY" in self.tmux.run("capture-pane", "-p", "-t", content.id))
+                # Watch from another tab so BEL becomes a pending native alert.
+                self.tmux.new_tab(content.id, "observer")
+                pid = None
+                for event, expected in (("UserPromptSubmit", "working"), ("PermissionRequest", "attention"),
+                                        ("PostToolUse", "working"), ("Stop", "finished")):
+                    self.tmux.run("send-keys", "-t", content.id, event, "Enter")
+
+                    def report_matches():
+                        value = self.tmux.run("show-options", "-pqv", "-t", content.id, "@workmux-agent")
+                        return json.loads(value) if value and json.loads(value).get("state") == expected else None
+
+                    report = eventually(report_matches, f"{harness} {event} did not report {expected}")
+                    if pid is None:
+                        pid = report["pid"]
+                    self.assertEqual(report["pid"], pid)
+                    os.kill(pid, 0)  # The recorded PID is not the already-exited hook.
+                eventually(lambda: any(tab.state == "finished" and tab.pane == content.id
+                                       for tab in self.tmux.attention_tabs()))
+                self.tmux.run("send-keys", "-t", content.id, "SessionEnd", "Enter")
+                eventually(lambda: self.tmux.run("show-options", "-pqv", "-t", content.id, "@workmux-agent") == "")
+                self.tmux.run("send-keys", "-t", content.id, "quit", "Enter")
 
     def test_keyboard_navigation_selects_child_row(self):
         first, content, sidebar = self.workspace("first")

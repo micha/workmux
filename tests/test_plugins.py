@@ -116,7 +116,7 @@ class PiPluginTests(unittest.TestCase):
             with patch("sys.stderr", new_callable=io.StringIO) as stderr:
                 self.assertEqual(main([operation, "pi", "--agent-dir", str(self.directory)]), 1)
                 self.assertIn("Refusing", stderr.getvalue())
-        with patch("workmux.plugins.pi_extension", side_effect=PermissionError("denied")), \
+        with patch("workmux.plugins._content", side_effect=PermissionError("denied")), \
                 patch("sys.stderr", new_callable=io.StringIO) as stderr:
             self.target.unlink()
             self.assertEqual(main(["install", "pi", "--agent-dir", str(self.directory)]), 1)
@@ -150,17 +150,20 @@ class PiPluginTests(unittest.TestCase):
         self.assertEqual(pi_status(str(self.directory)), ("conflict (directory)", self.target))
 
     def test_cli_install_without_harness_lists_status_without_tmux_or_writes(self):
-        with patch.dict(os.environ, {"PI_CODING_AGENT_DIR": str(self.directory)}), \
+        with patch.dict(os.environ, {"PI_CODING_AGENT_DIR": str(self.directory),
+                                     "OPENCODE_CONFIG_DIR": str(self.directory / "opencode"),
+                                     "CODEX_HOME": str(self.directory / "codex"),
+                                     "CLAUDE_CONFIG_DIR": str(self.directory / "claude")}), \
                 patch("workmux.cli.Tmux") as tmux, patch("sys.stdout", new_callable=io.StringIO) as stdout:
             self.assertEqual(main(["install"]), 0)
             self.assertIn("Supported harnesses:", stdout.getvalue())
-            self.assertIn("pi\tnot installed", stdout.getvalue())
+            self.assertRegex(stdout.getvalue(), r"pi\s+not installed\s+")
             self.assertFalse(self.directory.exists())
             install_pi(str(self.directory))
             stdout.seek(0)
             stdout.truncate()
             self.assertEqual(main(["install", "--agent-dir", str(self.directory)]), 0)
-            self.assertIn("pi\tinstalled\t", stdout.getvalue())
+            self.assertRegex(stdout.getvalue(), r"pi\s+installed\s+")
             self.assertIn(str(self.target), stdout.getvalue())
             tmux.assert_not_called()
 

@@ -21,4 +21,4 @@ where = ["."]
 include = ["workmux", "workmux.*"]
 
 [tool.setuptools.package-data]
-workmux = ["resources/*.ts"]
+workmux = ["resources/*.ts", "resources/*.mjs", "resources/*.json"]

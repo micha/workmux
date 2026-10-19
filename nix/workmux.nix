@@ -16,7 +16,8 @@ pkgs.python3Packages.buildPythonApplication {
       let
         relative = pkgs.lib.removePrefix ((toString source) + "/") (toString path);
         packagePath = relative == "workmux" || pkgs.lib.hasPrefix "workmux/" relative;
-        resourcePath = relative == "workmux/resources/pi-notify.ts";
+        resourcePath = pkgs.lib.hasPrefix "workmux/resources/" relative &&
+          builtins.any (suffix: pkgs.lib.hasSuffix suffix relative) [ ".ts" ".mjs" ".json" ];
       in
       toString path == toString source ||
       relative == "pyproject.toml" || relative == "README.md" ||
@@ -43,6 +44,18 @@ pkgs.python3Packages.buildPythonApplication {
       "$out/bin/workmux" install --agent-dir "$agent_dir" | grep -F 'installed'
       "$out/bin/workmux" uninstall pi --agent-dir "$agent_dir"
       test ! -e "$agent_dir/extensions/workmux-notify.ts"
+      for harness in opencode codex claude; do
+        "$out/bin/workmux" install "$harness" --agent-dir "$agent_dir/$harness"
+        "$out/bin/workmux" install --agent-dir "$agent_dir/$harness" | grep -F 'installed'
+        case "$harness" in
+          opencode) test -f "$agent_dir/$harness/plugins/workmux-notify.js" ;;
+          codex) test -f "$agent_dir/$harness/hooks.json" ;;
+          claude)
+            test -f "$agent_dir/$harness/skills/workmux/.claude-plugin/plugin.json"
+            test -f "$agent_dir/$harness/skills/workmux/hooks/hooks.json" ;;
+        esac
+        "$out/bin/workmux" uninstall "$harness" --agent-dir "$agent_dir/$harness"
+      done
     )
   '';
 }
