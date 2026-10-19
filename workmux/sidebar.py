@@ -3,11 +3,15 @@
 import curses
 from dataclasses import dataclass
 import re
+import time
 
 from .core import Tab, Tmux, WorkmuxError, Workspace
 
 
-INDICATORS = {"working": "⚙", "attention": "⚠", "finished": "✓", "alert": "●"}
+BRAILLE_WHEEL = ("⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "⣾")
+ANIMATION_INTERVAL = 0.125
+SNAPSHOT_INTERVAL = 0.4
+INDICATORS = {"working": BRAILLE_WHEEL[0], "attention": "⚠", "finished": "✓", "alert": "●"}
 STATUS_FOREGROUNDS = {
     "working": curses.COLOR_BLUE,
     "attention": curses.COLOR_RED,
@@ -89,23 +93,31 @@ def draw_text(screen, row: int, text: str, attribute: int = 0, *, x: int = 0,
         pass  # Wide window-name glyphs can hit the edge before the character limit.
 
 
+def working_indicator(now: float) -> str:
+    """Select a time-based animation frame, independent of input and polling."""
+    return BRAILLE_WHEEL[int(now / ANIMATION_INTERVAL) % len(BRAILLE_WHEEL)]
+
+
 def draw_row(screen, position: int, marker: str, row: SidebarRow, attribute: int,
-             colors: dict[str, int]) -> None:
-    """Draw a row, applying color only to its status symbol."""
+             colors: dict[str, int], working_frame: str | None = None) -> None:
+    """Draw a row, applying color only to its possibly animated status symbol."""
     text = f"{marker} {row.text}"
-    draw_text(screen, position, text, attribute)
     indicator = INDICATORS.get(row.state or "")
-    if indicator:
-        symbol_x = text.find(indicator)
+    symbol_x = text.find(indicator) if indicator else -1
+    if row.state == "working" and symbol_x >= 0:
+        indicator = working_frame or BRAILLE_WHEEL[0]
+        text = text[:symbol_x] + indicator + text[symbol_x + 1:]
+    draw_text(screen, position, text, attribute)
+    if indicator and symbol_x >= 0:
         color = colors.get(row.state or "", colors.get("other", 0))
-        if symbol_x >= 0 and color:
+        if color:
             draw_text(screen, position, indicator, attribute | color, x=symbol_x, max_width=2)
 
 
 def run_sidebar(tmux: Tmux, pane_id: str) -> None:
     def loop(screen):
         screen.keypad(True)
-        screen.timeout(400)
+        screen.timeout(round(ANIMATION_INTERVAL * 1000))
         try:
             curses.curs_set(0)
         except curses.error:
@@ -116,18 +128,27 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
         previous_pane = None
         offset = 0
         message = ""
+        pane = None
+        rows = []
+        next_snapshot = 0.0
         while True:
-            try:
-                pane = tmux.repair_width(pane_id, previous_pane)
-                previous_pane = pane
-                if pane.sidebar and tmux.run("display-message", "-p", "-t", pane_id, "#{window_panes}") == "1":
-                    tmux.close_empty_window(pane)
-                rows = sidebar_rows(tmux.workspaces(), tmux.attention_tabs())
-            except WorkmuxError as error:
-                screen.erase()
-                draw_text(screen, 1, str(error))
-                screen.refresh()
-                screen.getch()
+            now = time.monotonic()
+            if now >= next_snapshot:
+                try:
+                    pane = tmux.repair_width(pane_id, previous_pane)
+                    previous_pane = pane
+                    if pane.sidebar and tmux.run("display-message", "-p", "-t", pane_id, "#{window_panes}") == "1":
+                        tmux.close_empty_window(pane)
+                    rows = sidebar_rows(tmux.workspaces(), tmux.attention_tabs())
+                except WorkmuxError as error:
+                    screen.erase()
+                    draw_text(screen, 1, str(error))
+                    screen.refresh()
+                    screen.getch()
+                    continue
+                now = time.monotonic()
+                next_snapshot = now + SNAPSHOT_INTERVAL
+            if pane is None:
                 continue
 
             keys = [row.key for row in rows]
@@ -146,10 +167,14 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                 attribute = curses.A_REVERSE if pane.active and row.key == selected_key else 0
                 if current or row.state in ("attention", "alert"):
                     attribute |= curses.A_BOLD
-                draw_row(screen, position + 1, marker, row, attribute, colors)
+                draw_row(screen, position + 1, marker, row, attribute, colors, working_indicator(now))
             draw_text(screen, height - 2, message or "Enter: select  q: back", curses.A_DIM)
             screen.refresh()
             key = screen.getch()
+            if key != -1:
+                # Refresh focus before the next queued key without polling on
+                # animation-only timeouts.
+                next_snapshot = 0.0
             destination = None
             if key in (curses.KEY_UP, ord("k")) and keys:
                 selected_key = keys[(index - 1) % len(keys)]
@@ -175,9 +200,12 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                     else:
                         tmux.select_tab(destination.session, destination.window, pane_id)
                     message = ""
+                    next_snapshot = 0.0
                 elif key in (27, ord("q")) and pane.active:
                     tmux.toggle_sidebar(pane_id)
+                    next_snapshot = 0.0
             except WorkmuxError as error:
                 message = str(error)
+                next_snapshot = 0.0
 
     curses.wrapper(loop)

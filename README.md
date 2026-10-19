@@ -160,7 +160,7 @@ Tabs with agent activity or tmux alerts appear beneath their workspace:
 
 ```text
 › project-a
-    ├─ ⚙ 1:build
+    ├─ ⣷ 1:build
     └─ ⚠ 2:review
   project-b
     ├─ ✓ 1:changes
@@ -169,11 +169,12 @@ Tabs with agent activity or tmux alerts appear beneath their workspace:
 
 | Indicator | Color | State |
 | --- | --- | --- |
-| `⚙` | Blue | Agent working |
+| Filled Braille wheel | Blue | Agent working |
 | `⚠` | Red | Agent needs attention: a blocking input dialog, error, or interruption |
 | `✓` | Green | Agent finished its run |
 | `●` | Yellow | Other tmux alert: bell, monitored activity, or silence |
 
+Working tabs use an animated filled Braille wheel; the example above shows one frame.
 Click a child row to focus that tab, including tabs in other workspaces. Keyboard
 navigation with Up/Down or j/k and Enter works for both workspace and tab rows.
 Agent rows prefer the pane needing attention when a tab contains multiple agents.

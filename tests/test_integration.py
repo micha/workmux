@@ -21,6 +21,7 @@ from unittest.mock import patch
 from workmux.cli import main
 from workmux.core import Tmux, WorkmuxError
 from workmux.layouts import LAYOUTS
+from workmux.sidebar import BRAILLE_WHEEL
 
 
 def eventually(predicate, message="condition was not reached", timeout=8):
@@ -31,6 +32,11 @@ def eventually(predicate, message="condition was not reached", timeout=8):
             return result
         time.sleep(0.05)
     raise AssertionError(message)
+
+
+def pane_contains_any(tmux, pane, indicators):
+    output = tmux.run("capture-pane", "-p", "-t", pane)
+    return any(f"─ {indicator} " in output for indicator in indicators)
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux is required for integration tests")
@@ -979,11 +985,12 @@ class TmuxIntegrationTests(unittest.TestCase):
         current = self.tmux.new_tab(pane, "current")
         sidebar = next(item for item in self.tmux.panes(self.tmux.pane(current).window) if item.sidebar)
         self.attach(session)
-        for state, indicator in (("working", "⚙"), ("attention", "⚠"), ("finished", "✓")):
+        for state, indicators in (("working", BRAILLE_WHEEL), ("attention", ("⚠",)),
+                                  ("finished", ("✓",))):
             self.tmux.report_agent_state(pane, state, os.getpid())
             if state != "working":
                 self.tmux.run("send-keys", "-t", pane, "printf '\\a'", "Enter")
-            eventually(lambda: f"─ {indicator} " in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
+            eventually(lambda: pane_contains_any(self.tmux, sidebar.id, indicators))
             tab = next(tab for tab in self.tmux.attention_tabs() if tab.id == window)
             self.assertEqual(tab.state, state)
             self.assertEqual(tab.pane, pane)
@@ -1028,7 +1035,7 @@ class TmuxIntegrationTests(unittest.TestCase):
                 report = json.loads(self.tmux.run("show-options", "-pqv", "-t", content.id, "@workmux-agent"))
                 self.assertEqual(report["state"], state)  # Clearing alerts need not mutate agent reports.
         self.tmux.report_agent_state(content.id, "working", os.getpid())
-        eventually(lambda: "─ ⚙ " in self.tmux.run("capture-pane", "-p", "-t", original_sidebar.id))
+        eventually(lambda: pane_contains_any(self.tmux, original_sidebar.id, BRAILLE_WHEEL))
         self.assertEqual(self.tmux.run("display-message", "-p", "-t", content.id, "#{window_bell_flag}"), "0")
 
     def test_mouse_click_agent_row_switches_workspace_and_focuses_attention_pane(self):
@@ -1057,7 +1064,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.report_agent_state(target, "working", os.getpid())
         self.attach(first)
         self.tmux.toggle_sidebar(content.id)
-        eventually(lambda: "─ ⚙ " in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
+        eventually(lambda: pane_contains_any(self.tmux, sidebar.id, BRAILLE_WHEEL))
         self.tmux.run("send-keys", "-t", sidebar.id, "Down", "Down", "Enter")
         eventually(lambda: self.tmux.pane(target).active)
         self.assertEqual(self.tmux.pane(second + ":").id, target)

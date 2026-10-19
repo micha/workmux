@@ -7,7 +7,8 @@ from unittest.mock import patch
 
 from workmux.cli import main
 from workmux.core import Pane, Tab, Tmux, WorkmuxError, Workspace, _agent_state
-from workmux.sidebar import SidebarRow, draw_row, sidebar_rows, status_attributes
+from workmux.sidebar import (ANIMATION_INTERVAL, BRAILLE_WHEEL, SidebarRow, draw_row,
+                             sidebar_rows, status_attributes, working_indicator)
 
 
 class AgentStateTests(unittest.TestCase):
@@ -123,6 +124,29 @@ class SidebarTreeTests(unittest.TestCase):
                          [curses.COLOR_BLUE, curses.COLOR_RED,
                           curses.COLOR_GREEN, curses.COLOR_YELLOW])
 
+    def test_working_indicator_cycles_through_braille_wheel(self):
+        self.assertEqual([working_indicator(frame * ANIMATION_INTERVAL)
+                          for frame in range(len(BRAILLE_WHEEL))], list(BRAILLE_WHEEL))
+        self.assertEqual(working_indicator(len(BRAILLE_WHEEL) * ANIMATION_INTERVAL),
+                         BRAILLE_WHEEL[0])
+
+    def test_animated_working_symbol_receives_its_color(self):
+        class Screen:
+            def __init__(self):
+                self.calls = []
+
+            def getmaxyx(self):
+                return 20, 80
+
+            def addnstr(self, *args):
+                self.calls.append(args)
+
+        screen = Screen()
+        row = SidebarRow("$1", "@1", "  └─ ⣷ 1:build", "working")
+        draw_row(screen, 2, " ", row, 0, {"working": 256}, "⢿")
+        self.assertEqual(screen.calls[0], (2, 0, "    └─ ⢿ 1:build", 79, 0))
+        self.assertEqual(screen.calls[1], (2, 7, "⢿", 1, 256))
+
     def test_only_status_symbol_receives_its_color(self):
         class Screen:
             def __init__(self):
@@ -151,7 +175,7 @@ class SidebarTreeTests(unittest.TestCase):
         rows = sidebar_rows(workspaces, tabs)
         self.assertEqual([row.key for row in rows], [("$1", None), ("$1", "@1"), ("$1", "@2"),
                                                     ("$1", "@3"), ("$2", None), ("$2", "@4")])
-        self.assertEqual([row.text for row in rows], ["1:one", "  ├─ ⚙ 1:build", "  ├─ ⚠ 2:question",
+        self.assertEqual([row.text for row in rows], ["1:one", "  ├─ ⣷ 1:build", "  ├─ ⚠ 2:question",
                                                      "  └─ ✓ 3:done", "2:two", "  └─ ● 1:logs"])
 
     def test_workspace_positions_change_without_changing_row_identity(self):
