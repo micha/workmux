@@ -771,11 +771,11 @@ class TmuxIntegrationTests(unittest.TestCase):
         session, content, sidebar = self.workspace("My Project")
         workspace = self.tmux.workspaces()[0]
         self.assertEqual(workspace.id, session)
-        self.assertEqual(workspace.name, "000001-My Project")
+        self.assertEqual(workspace.name, "My Project")
         self.assertEqual(workspace.label, "My Project")
         self.assertEqual(sidebar.width, 36)
         self.assertEqual(self.tmux.run("show-options", "-gv", "status-position"), "top")
-        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).startswith("\n› My Project"))
+        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).startswith("\n› 1:My Project"))
         self.assertNotIn("WORKSPACES", self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
         tab_content = self.tmux.new_tab(content.id, "editor")
         panes = self.tmux.panes(self.tmux.pane(tab_content).window)
@@ -811,6 +811,28 @@ class TmuxIntegrationTests(unittest.TestCase):
                 self.tmux.new_workspace(label, directory)
         self.assertEqual(len(self.tmux.workspaces()), 1)
 
+    def test_workspace_names_and_sidebar_positions_follow_name_order(self):
+        beta, _, sidebar = self.workspace("beta")
+        alpha, _, _ = self.workspace("alpha")
+        self.assertEqual(
+            [(workspace.id, workspace.name) for workspace in self.tmux.workspaces()],
+            [(alpha, "alpha"), (beta, "beta")],
+        )
+        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).startswith(
+            "\n  1:alpha\n› 2:beta"
+        ))
+        self.tmux.run("rename-session", "-t", beta, "aardvark")
+        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).startswith(
+            "\n› 1:aardvark\n  2:alpha"
+        ))
+
+    def test_workspace_name_collision_preserves_native_session(self):
+        native, pane = self.native_session("taken")
+        with self.assertRaisesRegex(WorkmuxError, "duplicate session"):
+            self.tmux.new_workspace("taken", self.temporary.name)
+        self.assertEqual(self.tmux.pane(pane).session, native)
+        self.assertEqual(self.tmux.workspaces(), [])
+
     def test_manually_renamed_session_does_not_break_workspace_creation(self):
         first, _, _ = self.workspace()
         self.tmux.run("rename-session", "-t", first, "manual-name")
@@ -825,13 +847,13 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertEqual(self.tmux.pane(session + ":").directory, str(directory))
         self.assertEqual(self.tmux.workspaces()[0].directory, str(directory))
 
-    def test_native_next_previous_follow_numbered_name_order_after_rename(self):
+    def test_native_next_previous_follow_name_order_after_rename(self):
         first, _, _ = self.workspace("first")
         second, _, _ = self.workspace("second")
         third, _, _ = self.workspace("third")
         _, _, client = self.attach(first)
         # Demonstrate the proposed future reordering mechanism, without adding UI.
-        self.tmux.run("rename-session", "-t", third, "000000-third")
+        self.tmux.run("rename-session", "-t", third, "aardvark")
         self.tmux.run("switch-client", "-c", client, "-n")
         eventually(lambda: self.client_session(client) == second)
         self.tmux.run("switch-client", "-c", client, "-n")
@@ -860,7 +882,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         eventually(lambda: self.tmux.pane(first + ":").sidebar)
         selected_sidebar = self.tmux.pane(first + ":")
         # Send navigation through curses, then verify the attached client's session.
-        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", selected_sidebar.id).startswith("\n› first"))
+        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", selected_sidebar.id).startswith("\n› 1:first"))
         self.tmux.run("send-keys", "-t", selected_sidebar.id, "Down", "Enter")
         eventually(lambda: self.client_session(client) == second)
         self.assertFalse(self.tmux.pane(second + ":").sidebar)
@@ -906,13 +928,13 @@ class TmuxIntegrationTests(unittest.TestCase):
         first, _, sidebar = self.workspace("first")
         second, _, _ = self.workspace("second")
         master, _, client = self.attach(first)
-        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).startswith("\n› first"))
+        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).startswith("\n› 1:first"))
         # Second workspace is pane row 2, plus one top status row (SGR coordinates are 1-based).
         os.write(master, b"\x1b[<0;3;4M\x1b[<0;3;4m")
         eventually(lambda: self.client_session(client) == second)
         self.assertFalse(self.tmux.pane(second + ":").sidebar)
         other = next(item for item in self.tmux.panes(self.tmux.pane(second + ":").window) if item.sidebar)
-        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", other.id).startswith("\n  first"))
+        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", other.id).startswith("\n  1:first"))
         # The first workspace is on pane row 1, below the restored blank row.
         os.write(master, b"\x1b[<0;3;3M\x1b[<0;3;3m")
         eventually(lambda: self.client_session(client) == first)

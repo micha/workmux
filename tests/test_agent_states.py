@@ -119,8 +119,18 @@ class SidebarTreeTests(unittest.TestCase):
         rows = sidebar_rows(workspaces, tabs)
         self.assertEqual([row.key for row in rows], [("$1", None), ("$1", "@1"), ("$1", "@2"),
                                                     ("$1", "@3"), ("$2", None), ("$2", "@4")])
-        self.assertEqual([row.text for row in rows], ["first", "  ├─ ⚙ 1:build", "  ├─ ⚠ 2:question",
-                                                     "  └─ ✓ 3:done", "second", "  └─ ● 1:logs"])
+        self.assertEqual([row.text for row in rows], ["1:one", "  ├─ ⚙ 1:build", "  ├─ ⚠ 2:question",
+                                                     "  └─ ✓ 3:done", "2:two", "  └─ ● 1:logs"])
+
+    def test_workspace_positions_change_without_changing_row_identity(self):
+        alpha = Workspace("$8", "alpha", "old label", "/tmp")
+        beta = Workspace("$2", "beta", "beta", "/tmp")
+        original = sidebar_rows([beta], [])
+        reordered = sidebar_rows([alpha, beta], [])
+        self.assertEqual(original[0].text, "1:beta")
+        self.assertEqual(reordered[0].text, "1:alpha")
+        self.assertEqual(reordered[1].text, "2:beta")
+        self.assertEqual(original[0].key, reordered[1].key)
 
     def test_row_identity_survives_renames_and_index_changes(self):
         workspace = Workspace("$1", "one", "name", "/tmp")
@@ -130,9 +140,9 @@ class SidebarTreeTests(unittest.TestCase):
         self.assertNotEqual(original[1].text, changed[1].text)
 
     def test_labels_cannot_inject_terminal_controls(self):
-        rows = sidebar_rows([Workspace("$1", "one", "bad\x1b\tname", "/tmp")],
+        rows = sidebar_rows([Workspace("$1", "bad\x1b\tname", "unused", "/tmp")],
                             [Tab("$1", "@1", 1, "window\x07\x1b\tname", "working")])
-        self.assertEqual(rows[0].text, "bad  name")
+        self.assertEqual(rows[0].text, "1:bad  name")
         self.assertNotIn("\x1b", rows[1].text)
         self.assertNotIn("\x07", rows[1].text)
         self.assertNotIn("\t", rows[1].text)

@@ -50,7 +50,10 @@ It enables **only that session**:
 - Preserves your prefix, status styling/position, mouse settings, and unrelated bindings.
 - Adapts supported window-creation, split, and layout bindings while preserving
   their keys, key tables, repeat flags, and notes.
-- Leaves session names unchanged; the sidebar orders enabled workspaces by name.
+- Leaves existing session names unchanged; the sidebar orders enabled workspaces
+  by name and displays their 1-based position as `<index>:<session-name>`, for
+  example `1:workmux`. Positions change when workspaces are added, removed, or
+  renamed; they are not tmux session IDs.
 
 Bindings are server-wide in tmux. Adapted bindings use a session-local guard:
 enabled sessions invoke workmux, while other sessions execute the original tmux
@@ -267,9 +270,9 @@ workmux --server workmux-demo workspace new project-a --dir /path/to/project-a -
 
 This workflow skips the user's startup config and uses internal workmux defaults:
 top tabs, mouse support, prefix+Up/Down for workspaces, Left/Right for tabs, c for a
-new tab, s for sidebar focus, %/" for splits, and Alt+1–7/Space for layouts. It uses
-numbered session names with prefixes hidden in the sidebar. These defaults are
-not applied by `enable` to an existing server.
+new tab, s for sidebar focus, %/" for splits, and Alt+1–7/Space for layouts.
+New sessions use the requested workspace name without a numeric prefix.
+These defaults are not applied by `enable` to an existing server.
 
 After detaching, remove only the demonstration server with:
 

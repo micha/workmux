@@ -305,9 +305,7 @@ class Tmux:
         dedicated = self.run("show-options", "-sqv", "@workmux-configured", missing_ok=True) == "1"
         if any(workspace.label == label for workspace in existing):
             raise WorkmuxError(f"Workspace already exists: {label}")
-        prefixes = [workspace.name.split("-", 1)[0] for workspace in existing]
-        numbers = [int(prefix) for prefix in prefixes if prefix.isascii() and prefix.isdigit()]
-        name = f"{max(numbers, default=0) + 1:06d}-{label}"
+        name = label
         # Keep the bootstrap window large enough even when no client is attached.
         content = self.run("new-session", "-d", "-s", name, "-c", directory,
                            "-x", "120", "-y", "40", "-P", "-F", "#{pane_id}")

@@ -33,8 +33,8 @@ def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab]) -> list[SidebarRo
         if tab.state in INDICATORS:
             children.setdefault(tab.session, []).append(tab)
     rows = []
-    for workspace in workspaces:
-        rows.append(SidebarRow(workspace.id, None, _label(workspace.label)))
+    for position, workspace in enumerate(workspaces, 1):
+        rows.append(SidebarRow(workspace.id, None, f"{position}:{_label(workspace.name)}"))
         windows = sorted(children.get(workspace.id, []), key=lambda tab: tab.index)
         for index, tab in enumerate(windows):
             branch = "└─" if index == len(windows) - 1 else "├─"
