@@ -938,6 +938,40 @@ class TmuxIntegrationTests(unittest.TestCase):
         eventually(lambda: self.tmux.pane(sidebar.id).window_width == 40)
         eventually(lambda: self.tmux.pane(sidebar.id).width == 20)
 
+    def test_mouse_wheel_scrolls_sidebar_without_selecting_and_clicks_scrolled_row(self):
+        first, content, sidebar = self.workspace("repo-00")
+        sessions = [first]
+        for index in range(1, 12):
+            session, _, _ = self.workspace(f"repo-{index:02}")
+            sessions.append(session)
+        master, client_process, client = self.attach(first)
+        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 12, 120, 0, 0))
+        os.kill(client_process.pid, signal.SIGWINCH)
+        eventually(lambda: self.tmux.run("display-message", "-p", "-t", sidebar.id,
+                                         "#{pane_height}") == "11")
+
+        def first_row_is(text):
+            return self.tmux.run("capture-pane", "-p", "-t", sidebar.id).splitlines()[1].strip() == text
+
+        eventually(lambda: first_row_is("› 1:repo-00"))
+        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).splitlines()[9]
+                   == "Enter: select  q: back", "sidebar did not redraw at the new height")
+        # SGR wheel events over the sidebar while a content pane has focus.
+        os.write(master, b"\x1b[<65;3;3M")
+        eventually(lambda: first_row_is("4:repo-03"), "wheel-down did not scroll three rows")
+        time.sleep(0.6)  # A periodic snapshot must not restore the current session row.
+        self.assertTrue(first_row_is("4:repo-03"))
+        self.assertEqual(self.client_session(client), first)
+        self.assertTrue(self.tmux.pane(content.id).active)
+        os.write(master, b"\x1b[<64;3;3M")
+        eventually(lambda: first_row_is("› 1:repo-00"), "wheel-up did not restore the top")
+        os.write(master, b"\x1b[<65;3;3M")
+        eventually(lambda: first_row_is("4:repo-03"))
+        # Click the first visible row; its target is session 3, not session 0.
+        os.write(master, b"\x1b[<0;3;3M\x1b[<0;3;3m")
+        eventually(lambda: self.client_session(client) == sessions[3])
+        self.assertFalse(self.tmux.pane(sessions[3] + ":").sidebar)
+
     def test_mouse_click_selects_workspace_from_content_focus(self):
         first, _, sidebar = self.workspace("first")
         second, _, _ = self.workspace("second")

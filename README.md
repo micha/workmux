@@ -154,6 +154,13 @@ using ordinary pane navigation and use Up/Down or j/k followed by Enter. Escape/
 returns to the remembered content pane. The `›` marker identifies the current workspace.
 Workspace selection restores the destination session's selected tab.
 
+When the tree is taller than the sidebar, keyboard navigation scrolls to keep
+its selection visible. With tmux's `mouse` option enabled, the mouse wheel over
+the sidebar scrolls three rows at a time without changing focus or activating a
+workspace or tab. Click a visible row to select it; keyboard navigation resumes
+following the highlighted row. Wheel scrolling requires terminal/tmux mouse
+support and a curses build that exposes the corresponding wheel buttons.
+
 ### Git status
 
 A single colored symbol follows each workspace name, for example `1:workmux ●`.

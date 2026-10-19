@@ -13,6 +13,7 @@ from .git_status import GitStatusCache
 BRAILLE_WHEEL = ("⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "⣾")
 ANIMATION_INTERVAL = 0.125
 SNAPSHOT_INTERVAL = 0.4
+WHEEL_SCROLL_ROWS = 3
 INDICATORS = {"working": BRAILLE_WHEEL[0], "attention": "⚠", "finished": "✓", "alert": "●"}
 GIT_INDICATORS = {"clean": "✓", "dirty": "●", "ahead": "↑", "behind": "↓",
                   "diverged": "↕", "conflict": "!"}
@@ -76,6 +77,20 @@ def visible_offset(index: int, offset: int, rows: int) -> int:
     if index >= offset + rows:
         return max(0, index - rows + 1)
     return offset
+
+
+def scroll_offset(offset: int, delta: int, total: int, rows: int) -> int:
+    """Clamp the viewport, including after resize or removal of tree rows."""
+    return min(max(0, offset + delta), max(0, total - rows))
+
+
+def mouse_wheel_delta(buttons: int) -> int:
+    """Older curses builds may not expose the wheel-down button."""
+    if buttons & getattr(curses, "BUTTON4_PRESSED", 0):
+        return -WHEEL_SCROLL_ROWS
+    if buttons & getattr(curses, "BUTTON5_PRESSED", 0):
+        return WHEEL_SCROLL_ROWS
+    return 0
 
 
 def status_attributes() -> dict[str, int]:
@@ -150,11 +165,14 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
             curses.curs_set(0)
         except curses.error:
             pass  # Cursor visibility is optional on some terminals.
-        curses.mousemask(curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED)
+        curses.mousemask(curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED |
+                         getattr(curses, "BUTTON4_PRESSED", 0) |
+                         getattr(curses, "BUTTON5_PRESSED", 0))
         colors = status_attributes()
         selected_key = None
         previous_pane = None
         offset = 0
+        follow_selection = True
         message = ""
         pane = None
         rows = []
@@ -184,11 +202,16 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
             if selected_key not in keys or not pane.active:
                 current = (pane.session, pane.window)
                 parent = (pane.session, None)
-                selected_key = current if current in keys else parent if parent in keys else (keys[0] if keys else None)
+                new_selection = current if current in keys else parent if parent in keys else (keys[0] if keys else None)
+                if new_selection != selected_key:
+                    follow_selection = True
+                selected_key = new_selection
             index = keys.index(selected_key) if selected_key in keys else 0
             height, width = screen.getmaxyx()
             visible_rows = max(1, height - 4)
-            offset = visible_offset(index, offset, visible_rows)
+            offset = scroll_offset(offset, 0, len(rows), visible_rows)
+            if follow_selection:
+                offset = visible_offset(index, offset, visible_rows)
             screen.erase()
             for position, row in enumerate(rows[offset:offset + visible_rows]):
                 current = row.session == pane.session and (row.window is None or row.window == pane.window)
@@ -207,21 +230,29 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
             destination = None
             if key in (curses.KEY_UP, ord("k")) and keys:
                 selected_key = keys[(index - 1) % len(keys)]
+                follow_selection = True
             elif key in (curses.KEY_DOWN, ord("j")) and keys:
                 selected_key = keys[(index + 1) % len(keys)]
+                follow_selection = True
             elif key in (10, 13, curses.KEY_ENTER) and rows:
                 destination = rows[index]
+                follow_selection = True
             elif key == curses.KEY_MOUSE:
                 try:
                     _, x, y, _, buttons = curses.getmouse()
                 except curses.error:
                     continue  # A mouse event may disappear during a resize.
+                delta = mouse_wheel_delta(buttons)
                 clicked = y - 1 + offset
-                if 0 <= x < width and 1 <= y < 1 + visible_rows and 0 <= clicked < len(rows) and buttons & (
+                if 0 <= x < width and 0 <= y < height and delta:
+                    offset = scroll_offset(offset, delta, len(rows), visible_rows)
+                    follow_selection = False
+                elif 0 <= x < width and 1 <= y < 1 + visible_rows and 0 <= clicked < len(rows) and buttons & (
                     curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED
                 ):
                     destination = rows[clicked]
                     selected_key = destination.key
+                    follow_selection = True
             try:
                 if destination:
                     if destination.window is None:
