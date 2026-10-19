@@ -1,3 +1,4 @@
+import curses
 import io
 import json
 import os
@@ -6,7 +7,7 @@ from unittest.mock import patch
 
 from workmux.cli import main
 from workmux.core import Pane, Tab, Tmux, WorkmuxError, Workspace, _agent_state
-from workmux.sidebar import sidebar_rows
+from workmux.sidebar import SidebarRow, draw_row, sidebar_rows, status_attributes
 
 
 class AgentStateTests(unittest.TestCase):
@@ -108,6 +109,37 @@ class AgentStateTests(unittest.TestCase):
 
 
 class SidebarTreeTests(unittest.TestCase):
+    def test_status_colors_match_agent_meanings_and_other_alerts_are_yellow(self):
+        with patch("workmux.sidebar.curses.has_colors", return_value=True), \
+                patch("workmux.sidebar.curses.start_color"), \
+                patch("workmux.sidebar.curses.use_default_colors"), \
+                patch("workmux.sidebar.curses.init_pair") as init_pair, \
+                patch("workmux.sidebar.curses.color_pair", side_effect=lambda pair: pair * 256):
+            colors = status_attributes()
+
+        self.assertEqual(colors, {"working": 256, "attention": 512,
+                                  "finished": 768, "other": 1024})
+        self.assertEqual([call.args[1] for call in init_pair.call_args_list],
+                         [curses.COLOR_BLUE, curses.COLOR_RED,
+                          curses.COLOR_GREEN, curses.COLOR_YELLOW])
+
+    def test_only_status_symbol_receives_its_color(self):
+        class Screen:
+            def __init__(self):
+                self.calls = []
+
+            def getmaxyx(self):
+                return 20, 80
+
+            def addnstr(self, *args):
+                self.calls.append(args)
+
+        screen = Screen()
+        row = SidebarRow("$1", "@1", "  └─ ● 1:logs", "alert")
+        draw_row(screen, 2, " ", row, curses.A_BOLD, {"other": 1024})
+        self.assertEqual(screen.calls[0], (2, 0, "    └─ ● 1:logs", 79, curses.A_BOLD))
+        self.assertEqual(screen.calls[1], (2, 7, "●", 1, curses.A_BOLD | 1024))
+
     def test_idle_tabs_are_hidden_and_children_are_in_window_order(self):
         workspaces = [Workspace("$1", "one", "first", "/tmp"), Workspace("$2", "two", "second", "/tmp")]
         tabs = [Tab("$1", "@3", 3, "done", "finished"),

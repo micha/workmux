@@ -8,6 +8,12 @@ from .core import Tab, Tmux, WorkmuxError, Workspace
 
 
 INDICATORS = {"working": "⚙", "attention": "⚠", "finished": "✓", "alert": "●"}
+STATUS_FOREGROUNDS = {
+    "working": curses.COLOR_BLUE,
+    "attention": curses.COLOR_RED,
+    "finished": curses.COLOR_GREEN,
+    "other": curses.COLOR_YELLOW,
+}
 
 
 @dataclass(frozen=True)
@@ -52,6 +58,22 @@ def visible_offset(index: int, offset: int, rows: int) -> int:
     return offset
 
 
+def status_attributes() -> dict[str, int]:
+    """Initialize symbol colors, falling back to an uncolored sidebar."""
+    try:
+        if not curses.has_colors():
+            return {}
+        curses.start_color()
+        curses.use_default_colors()
+        attributes = {}
+        for pair, (state, foreground) in enumerate(STATUS_FOREGROUNDS.items(), 1):
+            curses.init_pair(pair, foreground, -1)
+            attributes[state] = curses.color_pair(pair)
+        return attributes
+    except curses.error:
+        return {}
+
+
 def draw_text(screen, row: int, text: str, attribute: int = 0, *, x: int = 0,
               max_width: int | None = None) -> None:
     height, width = screen.getmaxyx()
@@ -67,6 +89,19 @@ def draw_text(screen, row: int, text: str, attribute: int = 0, *, x: int = 0,
         pass  # Wide window-name glyphs can hit the edge before the character limit.
 
 
+def draw_row(screen, position: int, marker: str, row: SidebarRow, attribute: int,
+             colors: dict[str, int]) -> None:
+    """Draw a row, applying color only to its status symbol."""
+    text = f"{marker} {row.text}"
+    draw_text(screen, position, text, attribute)
+    indicator = INDICATORS.get(row.state or "")
+    if indicator:
+        symbol_x = text.find(indicator)
+        color = colors.get(row.state or "", colors.get("other", 0))
+        if symbol_x >= 0 and color:
+            draw_text(screen, position, indicator, attribute | color, x=symbol_x, max_width=2)
+
+
 def run_sidebar(tmux: Tmux, pane_id: str) -> None:
     def loop(screen):
         screen.keypad(True)
@@ -76,6 +111,7 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
         except curses.error:
             pass  # Cursor visibility is optional on some terminals.
         curses.mousemask(curses.BUTTON1_PRESSED | curses.BUTTON1_CLICKED)
+        colors = status_attributes()
         selected_key = None
         previous_pane = None
         offset = 0
@@ -110,7 +146,7 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                 attribute = curses.A_REVERSE if pane.active and row.key == selected_key else 0
                 if current or row.state in ("attention", "alert"):
                     attribute |= curses.A_BOLD
-                draw_text(screen, position + 1, f"{marker} {row.text}", attribute)
+                draw_row(screen, position + 1, marker, row, attribute, colors)
             draw_text(screen, height - 2, message or "Enter: select  q: back", curses.A_DIM)
             screen.refresh()
             key = screen.getch()

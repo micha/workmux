@@ -167,12 +167,12 @@ Tabs with agent activity or tmux alerts appear beneath their workspace:
     └─ ● 2:logs
 ```
 
-| Indicator | State |
-| --- | --- |
-| `⚙` | Agent working |
-| `⚠` | Agent needs attention: a blocking input dialog, error, or interruption |
-| `✓` | Agent finished its run |
-| `●` | Other tmux alert: bell, monitored activity, or silence |
+| Indicator | Color | State |
+| --- | --- | --- |
+| `⚙` | Blue | Agent working |
+| `⚠` | Red | Agent needs attention: a blocking input dialog, error, or interruption |
+| `✓` | Green | Agent finished its run |
+| `●` | Yellow | Other tmux alert: bell, monitored activity, or silence |
 
 Click a child row to focus that tab, including tabs in other workspaces. Keyboard
 navigation with Up/Down or j/k and Enter works for both workspace and tab rows.
