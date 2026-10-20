@@ -20,7 +20,7 @@ import unittest
 from unittest.mock import patch
 
 from workmux.cli import main
-from workmux.core import Tmux, WorkmuxError
+from workmux.core import Tmux, WorkmuxError, quote_tmux
 from workmux.layouts import LAYOUTS
 from workmux.sidebar import BRAILLE_WHEEL
 
@@ -173,6 +173,80 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.select_checkout(session, str(directory), original.id)
         self.assertEqual(len(self.tmux.workspaces()), 2)
         self.assertEqual(self.tmux.pane(session + ':').directory, str(directory))
+
+    def test_reload_all_sidebars_preserves_panes_content_geometry_focus_and_zoom(self):
+        self.socket = str(Path(self.temporary.name) / "reload ' $TOKEN ; socket")
+        self.tmux = Tmux(socket=self.socket)
+        first, content, sidebar = self.workspace('first')
+        extra = self.tmux.new_tab(content.id, 'extra')
+        second, other, other_sidebar = self.workspace('second')
+        plain = self.tmux.run('new-session', '-d', '-s', 'plain', '-P', '-F', '#{pane_id}')
+        self.tmux.run('set-option', '-p', '-t', plain, '@workspace-sidebar', '1')
+        self.attach(first)
+        self.tmux.run('select-window', '-t', content.window)
+        self.tmux.run('select-pane', '-t', content.id)
+        # Replace one old command, and leave another sidebar dead. Reload must
+        # supply the current installation's helper, not respawn the old command.
+        self.tmux.run('respawn-pane', '-k', '-t', sidebar.id, 'sleep 600')
+        self.tmux.run('set-option', '-w', '-t', other.window, 'remain-on-exit', 'on')
+        self.tmux.run('respawn-pane', '-k', '-t', other_sidebar.id, 'exit 0')
+        eventually(lambda: self.tmux.run('display-message', '-p', '-t', other_sidebar.id, '#{pane_dead}') == '1')
+        self.tmux.run('select-pane', '-t', other_sidebar.id)
+        self.tmux.run('resize-pane', '-Z', '-t', content.id)
+        snapshot_format = '#{pane_id}\t#{pane_pid}\t#{pane_active}\t#{window_id}\t#{@workspace-sidebar}'
+
+        def snapshot():
+            return {fields[0]: fields[1:] for line in self.tmux.run('list-panes', '-a', '-F', snapshot_format).splitlines()
+                    if (fields := line.split('\t'))}
+
+        before = snapshot()
+        windows = {fields[2] for fields in before.values()}
+        layouts = {window: self.tmux.run('display-message', '-p', '-t', window,
+                                         '#{window_layout}\t#{window_zoomed_flag}') for window in windows}
+        self.assertEqual(self.tmux.reload_sidebars(), 3)
+        after = snapshot()
+        self.assertEqual(set(before), set(after))
+        for pane, fields in before.items():
+            owned = fields[3] == '1' and pane != plain
+            if owned:
+                self.assertNotEqual(fields[0], after[pane][0])
+                self.assertEqual(self.tmux.run('display-message', '-p', '-t', pane, '#{pane_start_command}'),
+                                 quote_tmux(self.tmux.helper('sidebar', 'run')))
+            else:
+                self.assertEqual(fields[0], after[pane][0])
+            self.assertEqual(fields[1:], after[pane][1:])
+        for window in windows:
+            self.assertEqual(self.tmux.run('display-message', '-p', '-t', window,
+                                           '#{window_layout}\t#{window_zoomed_flag}'), layouts[window])
+        eventually(lambda: self.tmux.run('display-message', '-p', '-t', other_sidebar.id, '#{pane_dead}') == '0')
+        eventually(lambda: '1:first' in self.tmux.run('capture-pane', '-p', '-t', sidebar.id))
+        self.assertEqual(self.tmux.run('show-options', '-wqv', '-t', other.window, 'remain-on-exit'), 'on')
+
+    def test_sidebar_reload_rechecks_ownership_after_snapshot(self):
+        _, _, sidebar = self.workspace()
+        old_pid = self.tmux.run('display-message', '-p', '-t', sidebar.id, '#{pane_pid}')
+        real_run = self.tmux.run
+
+        def changed_ownership(*args, **kwargs):
+            result = real_run(*args, **kwargs)
+            if args[0] == 'list-panes' and '#{@workmux}' in args[3]:
+                real_run('set-option', '-pu', '-t', sidebar.id, '@workspace-sidebar')
+            return result
+
+        with patch.object(self.tmux, 'run', side_effect=changed_ownership):
+            self.assertEqual(self.tmux.reload_sidebars(), 0)
+        self.assertEqual(self.tmux.run('display-message', '-p', '-t', sidebar.id, '#{pane_pid}'), old_pid)
+
+    def test_sidebar_reload_cli_without_an_attached_client(self):
+        session, content, sidebar = self.workspace()
+        old_content_pid = self.tmux.run('display-message', '-p', '-t', content.id, '#{pane_pid}')
+        old_sidebar_pid = self.tmux.run('display-message', '-p', '-t', sidebar.id, '#{pane_pid}')
+        with patch('sys.stdout') as stdout:
+            self.assertEqual(main(['--socket', self.socket, 'sidebar', 'reload']), 0)
+            self.assertIn('Reloaded 1 sidebar panes.', ''.join(call.args[0] for call in stdout.write.call_args_list))
+        self.assertEqual(self.tmux.run('list-clients', '-t', session, '-F', '#{client_name}'), '')
+        self.assertEqual(self.tmux.run('display-message', '-p', '-t', content.id, '#{pane_pid}'), old_content_pid)
+        self.assertNotEqual(self.tmux.run('display-message', '-p', '-t', sidebar.id, '#{pane_pid}'), old_sidebar_pid)
 
     def attach(self, session):
         master, slave = pty.openpty()

@@ -107,6 +107,11 @@ def tmux_argument(value: str) -> str:
     return value[:-1] + "\\;" if value.endswith(";") else value
 
 
+def quote_tmux(value: str) -> str:
+    """Quote a tmux command-string argument separately from any shell quoting."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("\n", "\\n") + '"'
+
+
 def sidebar_width(window_width: int, preferred: int = 36) -> int:
     return min(max(4, preferred), max(4, window_width - 20))
 
@@ -324,6 +329,36 @@ class Tmux:
             self.run("kill-pane", "-t", sidebar)
             raise
         return sidebar
+
+    def reload_sidebars(self) -> int:
+        """Respawn owned sidebar panes on this server using the invoking installation."""
+        output = self.run("list-panes", "-a", "-F",
+                          "#{pane_id}\t#{session_id}\t#{window_id}\t#{@workmux}\t#{@workspace-sidebar}",
+                          missing_ok=True)
+        seen = set()
+        restarted = 0
+        command = quote_tmux(self.helper("sidebar", "run"))
+        condition = "#{&&:#{==:#{@workmux},1},#{==:#{@workspace-sidebar},1}}"
+        for line in output.splitlines():
+            fields = line.split("\t")
+            if len(fields) != 5 or fields[3:] != ["1", "1"]:
+                continue
+            pane, session, window = fields[:3]
+            if pane in seen:
+                continue
+            seen.add(pane)
+            target = session + ":" + window + "." + pane
+            # Recheck ownership in tmux's command queue. Respawning keeps the
+            # pane ID, geometry, focus, and options; never kill/recreate a pane.
+            try:
+                result = self.run("if-shell", "-F", "-t", target, condition,
+                                  f"respawn-pane -k -t {pane} {command} ; display-message -p 1")
+            except WorkmuxError as error:
+                if str(error).startswith(("can't find pane:", "can't find window:", "can't find session:")):
+                    continue  # A tab/workspace may close after the snapshot.
+                raise
+            restarted += result == "1"
+        return restarted
 
     def new_workspace(self, label: str, directory: str) -> str:
         label = validate_label(label)
@@ -602,7 +637,7 @@ class Tmux:
             # Successful CLI output would otherwise open tmux's output view in the source pane.
             command = self.helper(*args, *context, portable=True) + " >/dev/null"
             # tmux configuration quoting is separate from shell quoting.
-            quoted = '"' + command.replace("\\", "\\\\").replace('"', '\\"') + '"'
+            quoted = quote_tmux(command)
             return f"bind-key {key} run-shell -b {quoted}"
 
         layout_bindings = [

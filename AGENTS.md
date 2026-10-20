@@ -52,6 +52,9 @@
 - Snapshot only owned bindings in tmux's memory. Recognize wrappers on re-enable
   and do not overwrite later user/plugin edits or recreate removed bindings.
 - Target sessions, windows, and panes by stable IDs, not mutable names or indexes.
+- Sidebar reload respawns only owned panes in managed sessions, in place, using
+  the invoking installation. Recheck ownership in tmux before respawning; preserve
+  content, pane IDs, layout, focus, and zoom. Do not recreate missing sidebars.
 - Close tabs when only their owned sidebar remains; closing the final tab ends
   the workspace. Recheck ownership and pane count in tmux before destruction,
   preserve live content, and honor native lifecycle settings.

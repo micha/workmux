@@ -338,6 +338,7 @@ workmux layout tiled
 workmux layout next
 workmux layout balance
 workmux sidebar toggle-focus
+workmux sidebar reload       # Restart all owned sidebars on the selected server
 ```
 
 Inside tmux, commands default to its server. Outside tmux, the default server is
@@ -563,9 +564,21 @@ tmux set-environment -g PATH "$PATH"
 ```
 
 Do not remove an old Python environment while a sidebar process still uses it.
-After upgrading, existing sidebars must be restarted to use the new code: close
-only the sidebar panes, then run `workmux enable` to recreate them without
-restarting content processes.
+After upgrading, run the **updated installation** of workmux to reload every owned
+sidebar on the current tmux server:
+
+```sh
+workmux sidebar reload
+# From outside tmux, select your server explicitly if it is not named workmux:
+workmux --socket /path/to/tmux.sock sidebar reload
+```
+
+Reload works without an attached client or source pane. It restarts only sidebars
+in managed workspaces, keeping pane IDs, layout, focus, zoom, and content processes
+intact. It uses the invoking installation's Python environment rather than the old
+sidebar startup command. Sidebar navigation state and background caches reset.
+Missing sidebars are not recreated; use `workmux enable` for that. Reload does not
+reload tmux configuration, reconcile bindings, or reload agent integrations.
 
 ## References
 

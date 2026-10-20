@@ -7,6 +7,7 @@ import shlex
 from tree_sitter import Language, Parser
 import tree_sitter_tmux
 
+from .core import quote_tmux
 from .layouts import LAYOUTS
 
 
@@ -162,10 +163,6 @@ def command_options(binding: Binding) -> tuple[set[str], dict[str, int], list[st
     elif binding.command in ("next-layout", "previous-layout") and positional:
         raise UnsupportedBinding("unsupported layout arguments")
     return flags, values, positional
-
-
-def quote_tmux(value: str) -> str:
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("\n", "\\n") + '"'
 
 
 def wrap_binding(binding: Binding, command: str) -> str:

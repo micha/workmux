@@ -61,10 +61,11 @@ def parser() -> argparse.ArgumentParser:
     layout.add_argument("preset", choices=(*LAYOUTS, "next", "previous", "balance"))
     add_pane(layout)
 
-    sidebar = commands.add_parser("sidebar", help="Run or focus the sidebar")
+    sidebar = commands.add_parser("sidebar", help="Run, focus, or reload sidebars")
     sidebars = sidebar.add_subparsers(dest="action", required=True)
     for action in ("run", "toggle-focus"):
         add_pane(sidebars.add_parser(action))
+    sidebars.add_parser("reload", help="Restart all owned sidebar panes on the selected tmux server")
 
     agent = commands.add_parser("agent", help="Report an agent's state for sidebar tab indicators")
     agents = agent.add_subparsers(dest="action", required=True)
@@ -178,12 +179,13 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "layout":
             tmux.retile(require_pane(args), args.preset)
         elif args.command == "sidebar":
-            pane = require_pane(args)
-            if args.action == "toggle-focus":
-                tmux.toggle_sidebar(pane)
+            if args.action == "reload":
+                print(f"Reloaded {tmux.reload_sidebars()} sidebar panes.")
+            elif args.action == "toggle-focus":
+                tmux.toggle_sidebar(require_pane(args))
             else:
                 from .sidebar import run_sidebar
-                run_sidebar(tmux, pane)
+                run_sidebar(tmux, require_pane(args))
     except ModuleNotFoundError as error:
         if error.name not in ("tree_sitter", "tree_sitter_tmux"):
             raise
