@@ -49,6 +49,8 @@ It enables **only that session**:
 - Adds one sidebar to each existing window, without restarting content processes.
 - Preserves the current window, active panes, and zoom state.
 - Preserves your prefix, status styling/position, mouse settings, and unrelated bindings.
+- Registers a guarded runtime sidebar-focus hook, preserving existing hooks and
+  leaving `focus-events` unchanged. No tmux configuration files are edited.
 - Adapts supported window-creation, split, and layout bindings while preserving
   their keys, key tables, repeat flags, and notes.
 - Leaves existing session names unchanged; the sidebar orders enabled workspaces
@@ -106,7 +108,10 @@ Unsupported replacements remain untouched, rather than being overwritten with a
 stale snapshot. If you unbind a key, re-enabling does not recreate it.
 
 Workmux does not generate or reload tmux configuration; reload your own config
-normally, then re-enable.
+normally, then re-enable. Owned sidebar-focus hooks are not duplicated on
+re-enable, and edited or removed owned entries are left alone. If a plugin adds
+new window- or pane-local focus hooks after activation, re-enable to extend those
+arrays without replacing the plugin's entries.
 
 ### Which bindings are adapted?
 
@@ -150,10 +155,21 @@ a window with a sidebar, prefix+% and prefix+" split content, prefix+Alt+1 throu
 Alt+7 retile content, prefix+Space cycles layouts, and prefix+E balances adjacent
 content panes after enabling.
 
-In the sidebar, click a workspace if tmux mouse support is enabled, or focus it
-using ordinary pane navigation and use Up/Down or j/k followed by Enter. Escape/q
-returns to the remembered content pane. The `›` marker identifies the current workspace.
-Workspace selection restores the destination session's selected tab.
+In the sidebar, click a workspace if tmux mouse support is enabled. The `›`
+marker identifies the current workspace. Workspace selection restores the
+destination session's selected tab.
+
+With tmux's `focus-events` option on, workmux's runtime `pane-focus-in` hook returns
+focus to the previously active content pane whenever the sidebar gains focus.
+Clicks and scrolling still work, including clicking blank space without leaving
+the sidebar focused. This is immediate focus restoration, not a non-focusable
+pane; keyboard navigation inside the sidebar is unavailable in this mode.
+Workmux does not turn `focus-events` on or off. tmux may require detaching and
+reattaching clients after you change that option.
+
+With `focus-events` off (tmux's default), focus the sidebar using ordinary pane
+navigation and use Up/Down or j/k followed by Enter. Escape/q returns to the
+remembered content pane.
 
 When the tree is taller than the sidebar, keyboard navigation scrolls to keep
 its selection visible. With tmux's `mouse` option enabled, the mouse wheel over
@@ -535,7 +551,8 @@ this one to avoid duplicates. Workmux deliberately leaves other integrations alo
 
 ## Runtime and layout limits
 
-- Sidebars are replicated per window and poll every 400 ms.
+- Sidebars are replicated per window and poll their displayed state every 400 ms.
+  Sidebar focus restoration uses tmux events, not that polling interval.
 - The tab bar is tmux's status line, at the user's configured position, spanning
   the whole terminal width. Workmux does not impose a theme on existing sessions.
 - Sidebars have one blank row at the top and no title. They default to 36 columns

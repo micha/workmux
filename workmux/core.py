@@ -158,6 +158,11 @@ class Tmux:
         from .integration import Integration
         Integration(self).dispatch(token, target)
 
+    def _ensure_focus_hooks(self, pane_id: str) -> None:
+        from .integration import ensure_focus_hooks
+        pane = self.pane(pane_id)
+        ensure_focus_hooks(self, [pane.window])
+
     def helper(self, *args: str, portable: bool = False) -> str:
         selector = ["--socket", self.socket] if self.socket else ["--server", self.server]
         if portable:
@@ -386,6 +391,7 @@ class Tmux:
             else:
                 self._configure_defaults()
             self.add_sidebar(content)
+            self._ensure_focus_hooks(content)
         except WorkmuxError:
             self.run("kill-session", "-t", session)
             raise
@@ -399,6 +405,7 @@ class Tmux:
                            "-c", tmux_argument(workspace.directory), "-P", "-F", "#{pane_id}")
         try:
             self.add_sidebar(content)
+            self._ensure_focus_hooks(content)
         except WorkmuxError:
             self.run("kill-window", "-t", self.pane(content).window)
             raise
@@ -453,6 +460,7 @@ class Tmux:
             try:
                 self.run("set-option", "-w", "-t", window, "@workmux-checkout", json.dumps(directory))
                 self.add_sidebar(content)
+                self._ensure_focus_hooks(content)
             except WorkmuxError:
                 self.run("kill-window", "-t", session + ":" + window)
                 raise

@@ -52,6 +52,11 @@
 - Snapshot only owned bindings in tmux's memory. Recognize wrappers on re-enable
   and do not overwrite later user/plugin edits or recreate removed bindings.
 - Target sessions, windows, and panes by stable IDs, not mutable names or indexes.
+- Sidebar focus restoration uses owned, indexed runtime `pane-focus-in` hooks.
+  Preserve inherited and local user hooks, do not duplicate entries on re-enable
+  or recreate edited/removed entries, and leave `focus-events` unchanged. Return
+  focus natively only from an active owned sidebar with other panes; preserve
+  mouse click delivery and the actual previous content pane.
 - Sidebar reload respawns only owned panes in managed sessions, in place, using
   the invoking installation. Recheck ownership in tmux before respawning; preserve
   content, pane IDs, layout, focus, and zoom. Do not recreate missing sidebars.

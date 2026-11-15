@@ -11,6 +11,57 @@ from .core import Tmux, WorkmuxError
 
 
 STATE_OPTION = "@workmux-binding-state"
+FOCUS_HOOK_OPTION = "@workmux-sidebar-focus-hook"
+FOCUS_HOOK = (
+    'if-shell -F "#{&&:#{==:#{@workmux},1},'
+    '#{&&:#{==:#{@workspace-sidebar},1},#{&&:#{pane_active},#{>:#{window_panes},1}}}}" '
+    '{ select-pane -l }'
+)
+
+
+def ensure_focus_hooks(tmux: Tmux, windows: list[str]) -> None:
+    """Append owned runtime hooks without shadowing inherited user hooks.
+
+    A local hook array overrides inherited hooks, so extend existing local arrays
+    as well as the global default. Never create a local array merely to add ours.
+    Native last-pane selection uses the hook's stable source context, avoiding
+    a delayed helper stealing focus after a click has selected another tab.
+    Only one sidebar is allowed per tab, so its previous pane is content.
+    """
+    tmux.run("wait-for", "-L", "workmux-focus-hooks")
+    added = []
+    try:
+        # pane-focus-in is window/pane scoped. Unlike the hook itself, our user
+        # option marker needs explicit -w to avoid defaulting to session scope.
+        scopes = [("-gw",)]
+        for window in windows:
+            scopes.append(("-w", "-t", window))
+            scopes.extend(("-p", "-t", pane.id) for pane in tmux.panes(window) if pane.sidebar)
+        for scope in scopes:
+            # The marker also remembers intentional removal/replacement: enabling
+            # again must not resurrect a hook the user or a plugin has changed.
+            if tmux.run("show-options", "-qv", *scope, FOCUS_HOOK_OPTION):
+                continue
+            current = tmux.run("show-hooks", *scope, "pane-focus-in")
+            if not current and scope != ("-gw",):
+                continue
+            indexes = re.findall(r"^pane-focus-in\[(\d+)\] ", current, re.MULTILINE)
+            hook = f"pane-focus-in[{max(map(int, indexes), default=-1) + 1}]"
+            # -o refuses to replace an entry installed by a concurrent plugin.
+            # Capture canonical text in the same command queue for safe rollback.
+            applied = tmux.run("set-option", "-o", *scope, hook, FOCUS_HOOK,
+                               ";", "show-options", "-qv", *scope, hook)
+            added.append((scope, hook, applied))
+            tmux.run("set-option", *scope, FOCUS_HOOK_OPTION, hook)
+    except (WorkmuxError, KeyboardInterrupt):
+        for scope, hook, applied in reversed(added):
+            if tmux.run("show-options", "-qv", *scope, hook) == applied:
+                tmux.run("set-hook", "-u", *scope, hook)
+            if tmux.run("show-options", "-qv", *scope, FOCUS_HOOK_OPTION) == hook:
+                tmux.run("set-option", "-u", *scope, FOCUS_HOOK_OPTION)
+        raise
+    finally:
+        tmux.run("wait-for", "-U", "workmux-focus-hooks")
 
 
 @dataclass(frozen=True)
@@ -193,6 +244,7 @@ class Integration:
                 entry["applied"] = current[identity]
             self.tmux.run("set-option", "-s", STATE_OPTION, json.dumps({"version": 1, "bindings": records}))
             self.tmux.run("set-option", "-s", "@workmux-integrated", "1")
+            ensure_focus_hooks(self.tmux, windows)
         except (WorkmuxError, KeyboardInterrupt):
             rollback = []
             current = self.current_bindings()
@@ -252,6 +304,7 @@ class Integration:
                 args = ["-c", workspace.directory or pane.directory, *args]
             created = self.tmux.run("new-window", "-t", pane.session + ":", "-P", "-F", "#{pane_id}", *args)
             self.tmux.add_sidebar(created)
+            ensure_focus_hooks(self.tmux, [self.tmux.pane(created).window])
         elif binding.command == "split-window":
             created = self.tmux.run("split-window", "-t", content.id, "-P", "-F", "#{pane_id}", *args)
             if "d" not in flags:

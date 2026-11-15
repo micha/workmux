@@ -21,6 +21,7 @@ from unittest.mock import patch
 
 from workmux.cli import main
 from workmux.core import Tmux, WorkmuxError, quote_tmux
+from workmux.integration import FOCUS_HOOK_OPTION
 from workmux.layouts import LAYOUTS
 from workmux.sidebar import BRAILLE_WHEEL
 
@@ -549,6 +550,115 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertEqual(len(after), len(before) + 2)
         self.assertEqual(self.tmux.run("display-message", "-p", "-t", session, "#{session_name}"), "native")
 
+    def test_focus_hook_preserves_existing_hooks_and_reenable_is_idempotent(self):
+        session, pane = self.native_session()
+        window = self.tmux.pane(pane).window
+        sidebar = self.tmux.run("split-window", "-d", "-h", "-t", pane,
+                                "-P", "-F", "#{pane_id}", "sleep 600")
+        self.tmux.run("set-option", "-p", "-t", sidebar, "@workspace-sidebar", "1")
+        self.tmux.run("set-hook", "-p", "-t", pane, "pane-focus-in[1]", "display-message content-hook")
+        content_hooks = self.tmux.run("show-hooks", "-p", "-t", pane, "pane-focus-in")
+        scopes = [("-gw",), ("-w", "-t", window), ("-p", "-t", sidebar)]
+        originals = []
+        for index, scope in enumerate(scopes):
+            self.tmux.run("set-hook", *scope, f"pane-focus-in[{10 + index}]",
+                          f"set-option -s @user-focus-{index} preserved")
+            originals.append(self.tmux.run("show-hooks", *scope, "pane-focus-in"))
+        self.tmux.run("set-option", "-s", "focus-events", "on")
+        self.tmux.enable(pane)
+        snapshots = []
+        for scope, original in zip(scopes, originals):
+            current = self.tmux.run("show-hooks", *scope, "pane-focus-in")
+            self.assertIn(original, current)
+            self.assertEqual(current.count("select-pane -l"), 1)
+            snapshots.append(current)
+        self.tmux.enable(pane)
+        self.tmux.new_workspace("another", self.temporary.name)
+        for scope, snapshot in zip(scopes, snapshots):
+            self.assertEqual(self.tmux.run("show-hooks", *scope, "pane-focus-in"), snapshot)
+        self.assertEqual(self.tmux.run("show-options", "-sv", "focus-events"), "on")
+        self.assertEqual(self.tmux.run("show-hooks", "-p", "-t", pane, "pane-focus-in"), content_hooks)
+        self.attach(session)
+        self.tmux.run("select-pane", "-t", sidebar)
+        eventually(lambda: self.tmux.pane(pane).active)
+        eventually(lambda: self.tmux.run("show-options", "-sqv", "@user-focus-2") == "preserved")
+
+    def test_focus_hooks_extend_new_local_arrays_on_reenable(self):
+        session, content, sidebar = self.workspace()
+        self.tmux.run("set-hook", "-w", "-t", content.window, "pane-focus-in[7]",
+                      "set-option -s @local-window-hook ran")
+        self.tmux.run("set-hook", "-p", "-t", sidebar.id, "pane-focus-in[9]",
+                      "set-option -s @local-pane-hook ran")
+        self.tmux.enable(content.id)
+        self.tmux.run("set-option", "-s", "focus-events", "on")
+        self.attach(session)
+        self.tmux.run("select-pane", "-t", sidebar.id)
+        eventually(lambda: self.tmux.pane(content.id).active)
+        eventually(lambda: self.tmux.run("show-options", "-sqv", "@local-pane-hook") == "ran")
+        self.assertEqual(self.tmux.run("show-options", "-sqv", "@local-window-hook"), "ran")
+
+    def test_focus_hook_does_not_shadow_new_global_hooks_or_replace_user_edits(self):
+        session, pane = self.native_session()
+        self.tmux.enable(pane)
+        self.assertEqual(self.tmux.run("show-hooks", "-t", session, "pane-focus-in"), "")
+        self.tmux.run("set-hook", "-g", "pane-focus-in[90]", "set-option -s @late-hook ran")
+        self.tmux.run("set-option", "-s", "focus-events", "on")
+        self.attach(session)
+        eventually(lambda: self.tmux.run("show-options", "-sqv", "@late-hook") == "ran")
+        owned = self.tmux.run("show-options", "-gwqv", FOCUS_HOOK_OPTION)
+        for replacement in ("set-option -s @replacement preserved", None):
+            if replacement is None:
+                self.tmux.run("set-hook", "-gu", owned)
+            else:
+                self.tmux.run("set-hook", "-g", owned, replacement)
+            before = self.tmux.run("show-hooks", "-g", "pane-focus-in")
+            self.tmux.enable(pane)
+            self.assertEqual(self.tmux.run("show-hooks", "-g", "pane-focus-in"), before)
+
+    def test_focus_hook_registration_failure_rolls_back_hooks_and_activation(self):
+        session, pane = self.native_session()
+        self.tmux.run("set-hook", "-g", "pane-focus-in[90]", "display-message user-hook")
+        window = self.tmux.pane(pane).window
+        self.tmux.run("set-hook", "-w", "-t", window, "pane-focus-in[5]", "display-message local-hook")
+        original = self.tmux.run("show-hooks", "-g", "pane-focus-in")
+        local = self.tmux.run("show-hooks", "-w", "-t", window, "pane-focus-in")
+        real_run = self.tmux.run
+
+        def fail_marker(*args, **kwargs):
+            if args[0] == "set-option" and FOCUS_HOOK_OPTION in args and "-w" in args and "-u" not in args:
+                raise WorkmuxError("injected focus hook marker failure")
+            return real_run(*args, **kwargs)
+
+        with patch.object(self.tmux, "run", side_effect=fail_marker):
+            with self.assertRaisesRegex(WorkmuxError, "injected focus hook marker"):
+                self.tmux.enable(pane)
+        self.assertEqual(self.tmux.run("show-hooks", "-g", "pane-focus-in"), original)
+        self.assertEqual(self.tmux.run("show-hooks", "-w", "-t", window, "pane-focus-in"), local)
+        self.assertEqual(self.tmux.run("show-options", "-gwqv", FOCUS_HOOK_OPTION), "")
+        self.assertEqual(self.tmux.run("show-options", "-qv", "-t", session, "@workmux"), "")
+        self.assertEqual(len(self.tmux.panes(self.tmux.pane(pane).window)), 1)
+        self.tmux.enable(pane)  # Registration locks and ownership remain usable.
+
+    def test_focus_hook_never_overwrites_a_concurrent_plugin_entry(self):
+        _, pane = self.native_session()
+        real_run = self.tmux.run
+        inserted = None
+
+        def concurrent_hook(*args, **kwargs):
+            nonlocal inserted
+            if args[:2] == ("set-option", "-o") and "-gw" in args:
+                inserted = args[3]
+                real_run("set-hook", "-g", inserted, "display-message concurrent-plugin")
+            return real_run(*args, **kwargs)
+
+        with patch.object(self.tmux, "run", side_effect=concurrent_hook):
+            with self.assertRaisesRegex(WorkmuxError, "already set"):
+                self.tmux.enable(pane)
+        self.assertEqual(self.tmux.run("show-options", "-gqv", inserted),
+                         "display-message concurrent-plugin")
+        self.assertEqual(self.tmux.run("show-options", "-gwqv", FOCUS_HOOK_OPTION), "")
+        self.tmux.enable(pane)
+
     def test_activation_keybinding_and_native_creation_layout_shortcuts(self):
         session, pane = self.native_session()
         self.tmux.run("set-option", "-g", "prefix", "C-a")
@@ -1037,9 +1147,9 @@ class TmuxIntegrationTests(unittest.TestCase):
         # Actual terminal input exercises generated run-shell commands and quoting.
         os.write(master, b"\x02c")
         eventually(lambda: len(self.tmux.run("list-windows", "-t", first, "-F", "#{window_id}").splitlines()) == 2)
-        eventually(lambda: len(self.tmux.panes(self.tmux.pane(first + ":").window)) == 2)
-        tab = self.tmux.pane(first + ":")
-        self.assertNotEqual(tab.window, content.window)
+        tab = eventually(lambda: (pane if (pane := self.tmux.pane(first + ":")).window != content.window
+                                  and len(self.tmux.panes(pane.window)) == 2 else None),
+                         "new tab was not selected with its sidebar ready")
         os.write(master, b"\x02%")
         eventually(lambda: len(self.tmux.panes(tab.window)) == 3)
         os.write(master, b'\x02"')
@@ -1094,6 +1204,7 @@ class TmuxIntegrationTests(unittest.TestCase):
 
     def test_mouse_wheel_scrolls_sidebar_without_selecting_and_clicks_scrolled_row(self):
         first, content, sidebar = self.workspace("repo-00")
+        self.tmux.run("set-option", "-s", "focus-events", "on")
         sessions = [first]
         for index in range(1, 12):
             session, _, _ = self.workspace(f"repo-{index:02}")
@@ -1127,20 +1238,89 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertFalse(self.tmux.pane(sessions[3] + ":").sidebar)
 
     def test_mouse_click_selects_workspace_from_content_focus(self):
-        first, _, sidebar = self.workspace("first")
+        first, content, sidebar = self.workspace("first")
         second, _, _ = self.workspace("second")
+        self.tmux.run("set-option", "-s", "focus-events", "on")
         master, _, client = self.attach(first)
         eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).startswith("\n› 1:first"))
         # Second workspace is pane row 2, plus one top status row (SGR coordinates are 1-based).
         os.write(master, b"\x1b[<0;3;4M\x1b[<0;3;4m")
         eventually(lambda: self.client_session(client) == second)
         self.assertFalse(self.tmux.pane(second + ":").sidebar)
+        self.assertTrue(self.tmux.pane(content.id).active)
         other = next(item for item in self.tmux.panes(self.tmux.pane(second + ":").window) if item.sidebar)
         eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", other.id).startswith("\n  1:first"))
         # The first workspace is on pane row 1, below the restored blank row.
         os.write(master, b"\x1b[<0;3;3M\x1b[<0;3;3m")
         eventually(lambda: self.client_session(client) == first)
         self.assertFalse(self.tmux.pane(first + ":").sidebar)
+
+    def test_sidebar_focus_returns_to_the_actual_previous_content_pane(self):
+        session, content, sidebar = self.workspace()
+        other = self.tmux.split(content.id, "down")
+        self.tmux.run("set-option", "-s", "focus-events", "on")
+        master, _, _ = self.attach(session)
+        for target in (content.id, other, content.id):
+            # Native navigation does not update workmux's saved content option.
+            self.tmux.run("select-pane", "-t", target)
+            self.tmux.run("select-pane", "-t", sidebar.id)
+            eventually(lambda: self.tmux.pane(target).active,
+                       "sidebar did not return focus to the previous content pane")
+        self.tmux.run("set-hook", "-ag", "pane-focus-in", "set-option -s @focus-observed yes")
+        self.tmux.run("select-pane", "-t", other)
+        eventually(lambda: self.tmux.run("show-options", "-sqv", "@focus-observed") == "yes")
+        self.tmux.run("set-option", "-su", "@focus-observed")
+        # With the final content pane selected, prefix+o cycles to the sidebar.
+        os.write(master, b"\x02o")
+        eventually(lambda: self.tmux.run("show-options", "-sqv", "@focus-observed") == "yes")
+        eventually(lambda: self.tmux.pane(other).active)
+        # A stale queued event must not change an already-active content pane.
+        self.tmux.run("set-hook", "-R", "-t", sidebar.id, "pane-focus-in")
+        self.assertTrue(self.tmux.pane(other).active)
+
+    def test_sidebar_focus_returns_on_attach_without_an_active_pane_change(self):
+        session, content, sidebar = self.workspace()
+        self.tmux.run("select-pane", "-t", sidebar.id)
+        self.tmux.run("set-option", "-s", "focus-events", "on")
+        self.attach(session)
+        eventually(lambda: self.tmux.pane(content.id).active)
+
+    def test_blank_sidebar_click_returns_focus(self):
+        session, content, sidebar = self.workspace()
+        self.tmux.run("set-option", "-s", "focus-events", "on")
+        self.tmux.run("set-hook", "-ag", "pane-focus-in", "set-option -s @focus-observed yes")
+        master, _, _ = self.attach(session)
+        eventually(lambda: self.tmux.run("show-options", "-sqv", "@focus-observed") == "yes")
+        eventually(lambda: self.tmux.run("display-message", "-p", "-t", sidebar.id,
+                                         "#{mouse_any_flag}") == "1")
+        self.tmux.run("set-option", "-su", "@focus-observed")
+        os.write(master, b"\x1b[<0;3;8M\x1b[<0;3;8m")
+        eventually(lambda: self.tmux.run("show-options", "-sqv", "@focus-observed") == "yes")
+        eventually(lambda: self.tmux.pane(content.id).active)
+        self.assertEqual(self.tmux.pane(session + ":").id, content.id)
+
+    def test_focus_hook_ignores_unowned_panes_and_sidebar_only_windows(self):
+        session, content, sidebar = self.workspace()
+        self.assertEqual(self.tmux.run("show-options", "-sv", "focus-events"), "off")
+        self.tmux.run("select-pane", "-t", sidebar.id)
+        self.assertTrue(self.tmux.pane(sidebar.id).active)  # Keyboard access with focus-events off.
+        self.tmux.run("set-option", "-pu", "-t", sidebar.id, "@workspace-sidebar")
+        self.tmux.run("set-hook", "-R", "-t", sidebar.id, "pane-focus-in")
+        self.assertTrue(self.tmux.pane(sidebar.id).active)
+        _, pane = self.native_session("unmanaged")
+        self.tmux.run("split-window", "-d", "-h", "-t", pane)
+        self.tmux.run("set-option", "-p", "-t", pane, "@workspace-sidebar", "1")
+        self.tmux.run("set-hook", "-R", "-t", pane, "pane-focus-in")
+        self.assertTrue(self.tmux.pane(pane).active)
+        self.tmux.run("set-option", "-p", "-t", sidebar.id, "@workspace-sidebar", "1")
+        # Replace the UI so its ordinary empty-window cleanup does not close this fixture.
+        self.tmux.run("respawn-pane", "-k", "-t", sidebar.id, "sleep 600")
+        self.tmux.run("kill-pane", "-t", content.id)
+        self.tmux.run("set-option", "-s", "focus-events", "on")
+        self.attach(session)
+        self.tmux.run("set-hook", "-R", "-t", sidebar.id, "pane-focus-in")
+        self.assertTrue(self.tmux.pane(sidebar.id).active)
+        self.assertEqual(len(self.tmux.panes(sidebar.window)), 1)
 
     def test_workspace_and_tab_navigation_bindings_work_from_terminal(self):
         first, original, _ = self.workspace("first")
@@ -1243,6 +1423,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.report_agent_state(working, "working", os.getpid())
         self.tmux.report_agent_state(attention, "attention", os.getpid())
         self.tmux.new_tab(working, "unrelated")
+        self.tmux.run("set-option", "-s", "focus-events", "on")
         master, _, client = self.attach(first)
         self.tmux.run("send-keys", "-t", attention, "printf '\\a'", "Enter")
         eventually(lambda: "─ ⚠ " in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
