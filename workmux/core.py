@@ -623,7 +623,7 @@ class Tmux:
         if content is not None:
             self.run("select-pane", "-t", content.id)
 
-    def repair_width(self, target: str, previous: Pane | None = None) -> Pane:
+    def repair_width(self, target: str) -> Pane:
         pane = self.pane(target)
         if pane.sidebar and not pane.zoomed:
             count = self.run("display-message", "-p", "-t", pane.id, "#{window_panes}")
@@ -631,15 +631,6 @@ class Tmux:
                 return pane  # Empty tabs are closed by the sidebar; never resize a sole pane.
             desired = sidebar_width(pane.window_width, pane.preferred_sidebar_width)
             if pane.width != desired:
-                manually_resized = (
-                    previous is not None
-                    and pane.window_width == previous.window_width
-                    and pane.preferred_sidebar_width == previous.preferred_sidebar_width
-                    and pane.width != previous.width
-                )
-                if manually_resized:
-                    self.run("set-option", "-g", "@workmux-sidebar-width", str(pane.width))
-                    return replace(pane, preferred_sidebar_width=pane.width)
                 self.run("resize-pane", "-t", pane.id, "-x", str(desired))
                 return replace(pane, width=desired)
         return pane

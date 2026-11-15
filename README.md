@@ -581,9 +581,9 @@ this one to avoid duplicates. Workmux deliberately leaves other integrations alo
   and shrink in narrow windows; use at least 40 columns. Set the preferred width
   globally in tmux configuration with `set-option -g @workmux-sidebar-width 30`,
   or change it at runtime with `tmux set-option -g @workmux-sidebar-width 30`.
-  Existing sidebars adopt runtime changes automatically. With tmux's `mouse`
-  option enabled, dragging a sidebar border updates this global option and resizes
-  every sidebar. Workmux always reserves at least 20 columns for content and uses
+  Existing sidebars adopt runtime changes automatically. Dragging a sidebar border
+  does not change the preferred width; it snaps back on the next refresh.
+  Workmux always reserves at least 20 columns for content and uses
   at least 4 columns for the sidebar.
 - Layouts require at least two cells per pane dimension. Impossible layouts fail
   instead of being applied.

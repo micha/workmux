@@ -214,7 +214,6 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                          getattr(curses, "BUTTON5_PRESSED", 0))
         colors = status_attributes()
         selected_key = None
-        previous_pane = None
         offset = 0
         follow_selection = True
         message = ""
@@ -225,8 +224,7 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
             now = time.monotonic()
             if now >= next_snapshot:
                 try:
-                    pane = tmux.repair_width(pane_id, previous_pane)
-                    previous_pane = pane
+                    pane = tmux.repair_width(pane_id)
                     if pane.sidebar and tmux.run("display-message", "-p", "-t", pane_id, "#{window_panes}") == "1":
                         tmux.close_empty_window(pane)
                     workspaces = tmux.workspaces()
