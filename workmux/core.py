@@ -1,5 +1,6 @@
 """tmux operations; no terminal rendering or global mutable state."""
 
+import importlib.util
 import json
 import os
 import re
@@ -167,10 +168,15 @@ class Tmux:
         selector = ["--socket", self.socket] if self.socket else ["--server", self.server]
         if portable:
             return shlex.join(["workmux", *selector, *args])
-        package_root = str(Path(__file__).resolve().parent.parent)
+        pythonpath = [str(Path(__file__).resolve().parent.parent)]
         # Pin module discovery explicitly: tmux may have been started without the
-        # pipx environment or Nix wrapper's PYTHONPATH, and may run from any directory.
-        return shlex.join(["env", f"PYTHONPATH={package_root}", sys.executable, "-m", "workmux",
+        # invoking environment. Nix can put each dependency in a separate directory.
+        for module in ("tree_sitter", "tree_sitter_tmux"):
+            spec = importlib.util.find_spec(module)
+            if spec is not None and spec.origin:
+                pythonpath.append(str(Path(spec.origin).resolve().parent.parent))
+        path = os.pathsep.join(dict.fromkeys(pythonpath))
+        return shlex.join(["env", f"PYTHONPATH={path}", sys.executable, "-m", "workmux",
                            *selector, *args])
 
     def workspaces(self) -> list[Workspace]:

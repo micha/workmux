@@ -119,20 +119,33 @@ python3 -m pip install -e .
 - Optional native harness tests use temporary HOME/config/data/cache directories
   and make no model calls. Validate plugin discovery, schemas, and native hook
   trust without approving hooks or changing real harness settings.
-- Integration coverage has been exercised with tmux 3.6a on Linux. Do not imply
-  other tmux versions, platforms, or terminal notification implementations have
-  been validated without testing them.
+- Integration coverage has been exercised with tmux 3.6a and 3.8 on Linux; the
+  pinned flake has been built and tested on `aarch64-linux`. Do not imply other
+  tmux versions, platforms, or terminal notification implementations have been
+  validated without testing them.
 - Check `git diff --check` before finishing. Update human-facing documentation
   when workflows or limitations change.
 
 ### Optional Nix tooling
 
-- `shell.nix` supplies the Python dependencies, tmux, and pipx. When available,
-  validate with `nix-shell --run scripts/check.sh` and
-  `nix-shell --run scripts/check-install.sh`.
-- `nix/workmux.nix` defines the optional application build, includes bundled Pi
+- `flake.nix` exposes the application, development shell, and checks for
+  `x86_64-linux` and `aarch64-linux`; `flake.lock` pins Nixpkgs. Validate with
+  `nix build`, `nix flake check`, `nix develop --command scripts/check.sh`, and
+  `nix develop --command scripts/check-install.sh`. Keep the lock file tracked;
+  update it deliberately with `nix flake update nixpkgs` and rerun validation.
+- `shell.nix` shares the development shell with the flake: Python dependencies,
+  tmux, pipx, Git, and Node 24+ for notification tests. The legacy
+  `nix-shell --run scripts/check.sh` and `nix-shell --run scripts/check-install.sh`
+  remain available, but use the machine's `<nixpkgs>` rather than the lock file.
+- `nix/workmux.nix` defines the optional application build, includes bundled agent
   resources, and smoke-tests install/uninstall in a temporary agent directory.
-  `nix/python-deps.nix` defines the grammar dependency.
+  `nix/python-deps.nix` defines the grammar dependency. `nix/checks.nix` runs the
+  suite against the installed Nix package outside the checkout, without network
+  downloads. Keep the separate pipx check: it validates the non-Nix installation.
+- Validate profile installation only with an explicit temporary `--profile`;
+  never run `nix profile add .` against the user's real profile during development.
+  Local Git flakes see only tracked files, so add new source files to the index
+  before validating the flake.
 - Some workstations have a gitignored `reinstall-local.sh` convenience script.
   Do not assume it exists in a fresh clone or add it to distribution docs. When
   present, it delegates to `nix/workmux.nix`; test changes with `--build-only` or a

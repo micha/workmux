@@ -5,7 +5,7 @@ import shlex
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from workmux.cli import main, resolve_workspace
 from workmux.core import (Tmux, WorkmuxError, Workspace, sidebar_width, tmux_argument,
@@ -65,11 +65,25 @@ class InputTests(unittest.TestCase):
         self.assertEqual(command[-5:], ["--socket", tmux.socket, "tab", "new", "my tab"])
 
     def test_helper_uses_the_module_without_checkout_launcher(self):
-        with patch("workmux.core.__file__", "/tmp/installed/site-packages/workmux/core.py"):
+        with patch("workmux.core.__file__", "/tmp/installed/site-packages/workmux/core.py"), \
+                patch("workmux.core.importlib.util.find_spec", return_value=None):
             command = shlex.split(Tmux().helper("--help"))
         self.assertEqual(command[:2], ["env", "PYTHONPATH=/tmp/installed/site-packages"])
         self.assertEqual(command[3:5], ["-m", "workmux"])
         self.assertNotIn("bin/workmux", " ".join(command))
+
+    def test_helper_preserves_split_dependency_paths_and_deduplicates_them(self):
+        for roots in (("/tmp/parser ' $;", "/tmp/grammar space"), ("/tmp/shared", "/tmp/shared")):
+            with self.subTest(roots=roots), \
+                    patch("workmux.core.__file__", "/tmp/app/workmux/core.py"), \
+                    patch("workmux.core.importlib.util.find_spec", side_effect=[
+                        Mock(origin=f"{roots[0]}/tree_sitter/__init__.py"),
+                        Mock(origin=f"{roots[1]}/tree_sitter_tmux/__init__.py"),
+                    ]) as find_spec:
+                command = shlex.split(Tmux().helper("--help"))
+                self.assertEqual(command[1], "PYTHONPATH=" + os.pathsep.join(dict.fromkeys(["/tmp/app", *roots])))
+                self.assertEqual([call.args[0] for call in find_spec.call_args_list],
+                                 ["tree_sitter", "tree_sitter_tmux"])
 
     def test_module_helper_runs_outside_checkout_with_no_pythonpath(self):
         environment = dict(os.environ)

@@ -119,7 +119,8 @@ class Integration:
             if not candidate and not ("workmux" in line and "dispatch" in line):
                 continue
             try:
-                raw = self.tmux.run("list-keys", "-N", "-T", table, "-P", "", key)
+                # Newer tmux versions pad the key even with an empty prefix.
+                raw = self.tmux.run("list-keys", "-N", "-T", table, "-P", "", key).lstrip(" \t")
             except WorkmuxError as error:
                 if str(error).startswith("unknown key:"):
                     continue  # With -N, an existing key without a note is not listed.

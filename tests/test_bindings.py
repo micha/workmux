@@ -1,6 +1,9 @@
 import unittest
+from unittest.mock import Mock
 
 from workmux.bindings import BindingParser, UnsupportedBinding, command_options, wrap_binding
+from workmux.core import quote_tmux
+from workmux.integration import Integration
 
 
 class BindingTests(unittest.TestCase):
@@ -79,6 +82,18 @@ class BindingTests(unittest.TestCase):
         for command in ("display-message unchanged", "send-keys hello", "select-pane -L"):
             with self.subTest(command=command), self.assertRaises(UnsupportedBinding):
                 command_options(self.parser.parse("bind-key X " + command))
+
+    def test_evaluated_notes_preserve_multiline_text_with_or_without_key_padding(self):
+        line = "bind-key -T prefix v split-window -h"
+        note = "café price $5\nc second line"
+        for padding in ("", " ", "\t  "):
+            with self.subTest(padding=padding):
+                tmux = Mock()
+                tmux.run.side_effect = [line, f"{padding}v {note}"]
+                bindings = Integration(tmux).current_bindings()
+                self.assertEqual(bindings[("prefix", "v")],
+                                 f"bind-key -N {quote_tmux(note)} -T prefix v split-window -h")
+                tmux.run.assert_called_with("list-keys", "-N", "-T", "prefix", "-P", "", "v")
 
     def test_tokens_distinguish_identical_keys_in_different_tables(self):
         first = self.parser.parse("bind-key -T prefix X new-window")

@@ -22,6 +22,10 @@ additionally require a compatible terminal.
 
 ## Install
 
+Choose either pipx or Nix; you do not need both.
+
+### pipx
+
 Install from a local clone with [pipx](https://pipx.pypa.io/). From the repository
 root, run:
 
@@ -34,6 +38,24 @@ pipx install --force .
 This project is not published to PyPI; use the local repository path. pipx installs
 the Python dependencies, but tmux must already be installed separately. Ensure
 pipx's application bin directory is on your `PATH`.
+
+### Nix
+
+With Nix's `nix-command` and `flakes` features enabled, run from the repository root:
+
+```sh
+nix profile add .
+# To update the profile entry after updating the source:
+nix profile upgrade workmux
+```
+
+On older Nix versions, use `nix profile install .` instead of `nix profile add .`.
+The flake supplies Python, its dependencies, and tmux, pinned by `flake.lock`.
+Ensure your Nix profile's `bin` directory is on tmux's `PATH`. Nix outputs are
+provided for `x86_64-linux` and `aarch64-linux`.
+
+To build without changing your profile, use `nix build`; the command is then
+available at `./result/bin/workmux`. Nix remains optional.
 
 ## Enable in your existing tmux session
 

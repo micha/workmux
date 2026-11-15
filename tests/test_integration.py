@@ -45,6 +45,12 @@ def pane_contains_any(tmux, pane, indicators):
 class TmuxIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="workmux-test-")
+        # Native content shells must not read the developer's startup files.
+        environment = patch.dict(os.environ, HOME=self.temporary.name,
+                                 XDG_CONFIG_HOME=str(Path(self.temporary.name) / ".config"),
+                                 ENV=os.devnull, BASH_ENV=os.devnull, PS1="$ ")
+        environment.start()
+        self.addCleanup(environment.stop)
         # Deliberately exercise both tmux config and shell quoting.
         self.socket = str(Path(self.temporary.name) / "socket ' with spaces")
         self.tmux = Tmux(socket=self.socket)

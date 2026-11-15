@@ -1,4 +1,4 @@
-# Shared build definition for machine-local Nix installation helpers.
+# Shared application build for the flake and optional local Nix helpers.
 { pkgs, source ? ../. }:
 
 let
