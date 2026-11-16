@@ -299,6 +299,8 @@ Working tabs use an animated filled Braille wheel; the example above shows one f
 Click a child row to focus that tab, including tabs in other workspaces. Keyboard
 navigation with Up/Down or j/k and Enter works for workspace, checkout, and tab rows.
 Agent rows prefer the pane needing attention when a tab contains multiple agents.
+They display that pane's terminal title when available (for example, `π - workmux`),
+falling back to the tab name. Workspace names and native-alert tab names are unchanged.
 Tabs are listed in window-index order within each group; renaming or reordering
 them does not break their click targets. Idle tabs without alerts are hidden,
 while discovered checkout rows remain visible.

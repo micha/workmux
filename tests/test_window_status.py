@@ -9,9 +9,9 @@ from workmux.status import (ANIMATION_INTERVAL, BRAILLE_WHEEL, INDICATOR_OPTION,
 
 
 def row(pane, *, session="$0", window="@0", sidebar="", dead="0", managed="1",
-        indicator="", flags="*", report="", name="work"):
+        indicator="", flags="*", report="", name="work", title=""):
     return (f"{managed}\t{indicator}\t{session}\t{window}\t1\t{flags}\t{pane}\t"
-            f"{sidebar}\t{dead}\t{report}\t{name}")
+            f"{sidebar}\t{dead}\t{report}\t{title}\t{name}")
 
 
 class ActivitySnapshotTests(unittest.TestCase):

@@ -1361,6 +1361,24 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertEqual(self.tmux.run("list-panes", "-s", "-t", session, "-F", "#{pane_id}"), panes)
         self.assertEqual(self.tmux.pane(session + ":").window, self.tmux.pane(tab).window)
 
+    def test_agent_pane_title_updates_sidebar_with_tab_name_fallback(self):
+        session, content, sidebar = self.workspace()
+        self.tmux.run('respawn-pane', '-k', '-t', content.id, 'sleep 60')
+        self.tmux.run('rename-window', '-t', content.window, 'fallback tab')
+        self.tmux.run('select-pane', '-t', content.id, '-T', 'π - workmux')
+        self.tmux.report_agent_state(content.id, 'working', os.getpid())
+        self.attach(session)
+        capture = lambda: self.tmux.run('capture-pane', '-p', '-t', sidebar.id)
+        eventually(lambda: 'π - workmux' in capture())
+        self.assertEqual(self.tmux.attention_tabs()[0].name, 'fallback tab')
+        self.tmux.run('select-pane', '-t', content.id, '-T', 'new ; $x')
+        eventually(lambda: 'new ; $x' in capture())
+        self.assertEqual(self.tmux.attention_tabs()[0].title, 'new ; $x')
+        self.tmux.run('select-pane', '-t', content.id, '-T', '')
+        eventually(lambda: 'fallback tab' in capture())
+        self.assertIsNone(self.tmux.attention_tabs()[0].title)
+        self.assertEqual(self.tmux.pane(content.id).window, content.window)
+
     def test_agent_state_is_reported_before_enable_and_rendered_as_tree(self):
         session, pane = self.native_session()
         self.assertEqual(main(["--socket", self.socket, "agent", "state", "working",

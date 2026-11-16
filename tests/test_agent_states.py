@@ -37,14 +37,14 @@ class AgentStateTests(unittest.TestCase):
 
     def test_snapshot_aggregates_priority_and_native_alerts_in_one_call(self):
         output = (
-            '$1\t@1\t2\t!\t%1\t\t0\t{"state":"finished"}\tbuild\n'
-            '$1\t@1\t2\t!\t%2\t\t0\t{"state":"working"}\tbuild\n'
-            '$1\t@1\t2\t!\t%3\t\t0\t{"state":"attention"}\tbuild\n'
-            '$1\t@1\t2\t!\t%4\t1\t0\t{"state":"attention"}\tbuild\n'
-            '$1\t@2\t1\t#\t%5\t\t0\t\tlogs\n'
-            '$1\t@3\t3\t~\t%6\t\t1\t{"state":"working"}\tsilence\n'
-            '$1\t@4\t4\t*\t%7\t\t0\t\tordinary\n'
-            '$2\t@5\t0\t!\t%8\t\t0\t{"state":"finished"}\treview\n'
+            '$1\t@1\t2\t!\t%1\t\t0\t{"state":"finished"}\t\tbuild\n'
+            '$1\t@1\t2\t!\t%2\t\t0\t{"state":"working"}\t\tbuild\n'
+            '$1\t@1\t2\t!\t%3\t\t0\t{"state":"attention"}\t\tbuild\n'
+            '$1\t@1\t2\t!\t%4\t1\t0\t{"state":"attention"}\t\tbuild\n'
+            '$1\t@2\t1\t#\t%5\t\t0\t\t\tlogs\n'
+            '$1\t@3\t3\t~\t%6\t\t1\t{"state":"working"}\t\tsilence\n'
+            '$1\t@4\t4\t*\t%7\t\t0\t\t\tordinary\n'
+            '$2\t@5\t0\t!\t%8\t\t0\t{"state":"finished"}\t\treview\n'
             'malformed row\n'
         )
         with patch.object(Tmux, "run", return_value=output) as run:
@@ -59,7 +59,7 @@ class AgentStateTests(unittest.TestCase):
     def test_passive_states_disappear_when_native_alert_is_cleared(self):
         for state in ("attention", "finished", "working"):
             with self.subTest(state=state):
-                line = '$0\t@0\t1\t{flags}\t%0\t\t0\t' + json.dumps({"state": state}) + '\twork'
+                line = '$0\t@0\t1\t{flags}\t%0\t\t0\t' + json.dumps({"state": state}) + '\t\twork'
                 with patch.object(Tmux, "run", side_effect=[line.replace("{flags}", "!"),
                                                            line.replace("{flags}", "*")]) as run:
                     tmux = Tmux()
@@ -69,16 +69,47 @@ class AgentStateTests(unittest.TestCase):
                     self.assertEqual(run.call_count, 2)  # Snapshotting does not mutate reports/options.
 
     def test_cleared_attention_falls_back_to_another_working_agent(self):
-        output = ('$0\t@0\t1\t*\t%0\t\t0\t{"state":"attention"}\twork\n'
-                  '$0\t@0\t1\t*\t%1\t\t0\t{"state":"working"}\twork')
+        output = ('$0\t@0\t1\t*\t%0\t\t0\t{"state":"attention"}\t\twork\n'
+                  '$0\t@0\t1\t*\t%1\t\t0\t{"state":"working"}\t\twork')
         with patch.object(Tmux, "run", return_value=output):
             self.assertEqual(Tmux().attention_tabs(), [Tab("$0", "@0", 1, "work", "working", "%1")])
 
     def test_stale_pid_does_not_mask_native_alert_and_window_name_keeps_tabs(self):
-        output = '$0\t@0\t1\t!\t%0\t\t0\t{"state":"working","pid":123}\tname\twith tab'
+        output = '$0\t@0\t1\t!\t%0\t\t0\t{"state":"working","pid":123}\tstale title\tname\twith tab'
         with patch.object(Tmux, "run", return_value=output), \
                 patch("workmux.core.os.kill", side_effect=ProcessLookupError):
             self.assertEqual(Tmux().attention_tabs(), [Tab("$0", "@0", 1, "name\twith tab", "alert")])
+
+    def test_titles_follow_winning_agent_and_empty_titles_fall_back(self):
+        output = ('\u00240\t@0\t1\t!\t%0\t\t0\t{"state":"working"}\tworker\twork\n'
+                  '\u00240\t@0\t1\t!\t%1\t\t0\t{"state":"attention"}\tπ - workmux\twork\n'
+                  '\u00240\t@0\t1\t!\t%2\t1\t0\t{"state":"attention"}\tsidebar\twork\n'
+                  '\u00240\t@0\t1\t!\t%3\t\t1\t{"state":"attention"}\tdead\twork')
+        with patch.object(Tmux, 'run', return_value=output) as run:
+            tab = Tmux().attention_tabs()[0]
+        self.assertEqual(tab.name, 'work')
+        self.assertEqual(tab.title, 'π - workmux')
+        self.assertEqual(tab.pane, '%1')
+        self.assertEqual(run.call_count, 1)
+        workspace = Workspace('$0', 'workspace', '', '/jobs')
+        self.assertTrue(sidebar_rows([workspace], [tab])[1].text.endswith('1:π - workmux'))
+        for title in ('', '   '):
+            with patch.object(Tmux, 'run', return_value=output.splitlines()[1].replace('π - workmux', title)):
+                tab = Tmux().attention_tabs()[0]
+            self.assertIsNone(tab.title)
+            self.assertTrue(sidebar_rows([workspace], [tab])[1].text.endswith('1:work'))
+
+    def test_titles_are_used_in_checkout_groups_and_sanitized(self):
+        tab = Tab('$0', '@0', 1, 'work', 'working', '%0', ('/jobs/repo',), 'π\x1b\x07 title')
+        workspace = Workspace('$0', 'workspace', '', '/jobs')
+        rows = sidebar_rows([workspace], [tab], checkouts={'$0': ('/jobs/repo',)})
+        self.assertTrue(rows[-1].text.endswith('1:π   title'))
+        self.assertEqual(rows[-1].key, ('$0', '@0'))
+
+    def test_native_alerts_do_not_use_unreported_pane_titles(self):
+        line = '$0\t@0\t1\t!\t%0\t\t0\t\tterminal title\twork'
+        with patch.object(Tmux, 'run', return_value=line):
+            self.assertEqual(Tmux().attention_tabs(), [Tab('$0', '@0', 1, 'work', 'alert')])
 
     def test_report_sets_only_pane_metadata_and_idle_clears_it(self):
         pane = Pane("%4", "$0", "@0", False, True, 95, 120, False, "/tmp")
@@ -107,7 +138,7 @@ class AgentStateTests(unittest.TestCase):
                 report['root'] = root
             if pid is not None:
                 report['pid'] = pid
-            return f'$1\t@1\t1\t!\t{pane}\t\t{dead}\t{json.dumps(report)}\twork'
+            return f'$1\t@1\t1\t!\t{pane}\t\t{dead}\t{json.dumps(report)}\t\twork'
 
         output = '\n'.join([line('%1', 'attention', '/job/api'),
                             line('%2', 'working', '/job/ui'),
@@ -127,7 +158,7 @@ class AgentStateTests(unittest.TestCase):
             Tmux().report_agent_state('%4', 'working', root=['/job/api', '/job/api/src', '/job/api'])
             report = json.loads(run.call_args.args[5])
         self.assertEqual(report, {'state': 'working', 'roots': ['/job/api', '/job/api/src']})
-        line = '$0\t@0\t1\t*\t%4\t\t0\t' + json.dumps(report) + '\twork'
+        line = '$0\t@0\t1\t*\t%4\t\t0\t' + json.dumps(report) + '\t\twork'
         with patch.object(Tmux, 'run', return_value=line):
             self.assertEqual(Tmux().attention_tabs()[0].roots, ('/job/api', '/job/api/src'))
         with patch('workmux.cli.Tmux') as tmux:

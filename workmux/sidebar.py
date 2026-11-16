@@ -99,11 +99,11 @@ def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
             for child_index, tab in enumerate(grouped[directory]):
                 connector = "└─" if child_index == len(grouped[directory]) - 1 else "├─"
                 prefix = "     " if last else "  │  "
-                text = f"{prefix}{connector} {INDICATORS[tab.state]} {tab.index}:{_label(tab.name)}"
+                text = f"{prefix}{connector} {INDICATORS[tab.state]} {tab.index}:{_label(tab.title or tab.name)}"
                 rows.append(SidebarRow(workspace.id, tab.id, text, tab.state))
         for index, tab in enumerate(ungrouped):
             branch = "└─" if index == len(ungrouped) - 1 else "├─"
-            text = f"  {branch} {INDICATORS[tab.state]} {tab.index}:{_label(tab.name)}"
+            text = f"  {branch} {INDICATORS[tab.state]} {tab.index}:{_label(tab.title or tab.name)}"
             rows.append(SidebarRow(workspace.id, tab.id, text, tab.state))
     return rows
 

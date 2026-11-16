@@ -42,6 +42,7 @@ class Tab:
     state: str
     pane: str | None = None
     roots: tuple[str | None, ...] = ()
+    title: str | None = None
 
 
 def _agent_state(value: str, alive: dict[int, bool]) -> str | None:
@@ -76,7 +77,8 @@ def _agent_state(value: str, alive: dict[int, bool]) -> str | None:
 
 _ACTIVITY_FORMAT = (
     "#{session_id}\t#{window_id}\t#{window_index}\t#{window_flags}\t#{pane_id}"
-    "\t#{@workspace-sidebar}\t#{pane_dead}\t#{@workmux-agent}\t#{window_name}"
+    "\t#{@workspace-sidebar}\t#{pane_dead}\t#{@workmux-agent}"
+    "\t#{s/[\t\r\n]/ /:pane_title}\t#{window_name}"
 )
 
 
@@ -91,11 +93,11 @@ def _attention_tabs(output: str) -> list[Tab]:
     tabs = {}
     roots = {}
     alive = {}
-    for line in output.splitlines():
-        fields = line.split("\t", 8)
-        if len(fields) != 9:
+    for line in output.split("\n"):
+        fields = line.split("\t", 9)
+        if len(fields) != 10:
             continue
-        session, window, index, flags, pane, sidebar, dead, report, name = fields
+        session, window, index, flags, pane, sidebar, dead, report, title, name = fields
         try:
             index = int(index)
         except ValueError:
@@ -117,7 +119,7 @@ def _attention_tabs(output: str) -> list[Tab]:
         if state in ("attention", "finished") and native != "alert":
             state = None
         if state and _AGENT_PRIORITY[state] > _AGENT_PRIORITY.get(current.state, 0):
-            current = Tab(session, window, index, name, state, pane)
+            current = Tab(session, window, index, name, state, pane, title=title.strip() or None)
         tabs[key] = current
     return sorted((replace(tab, roots=tuple(roots.get(key, ()))
                            if any(root is not None for root in roots.get(key, ())) else ())
@@ -286,17 +288,17 @@ class Tmux:
         rows = []
         publishers = set()
         indicators = {}
-        for line in output.splitlines():
+        for line in output.split("\n"):
             fields = line.split("\t", 2)
             if len(fields) != 3:
                 continue
             managed, indicator, row = fields
-            panes = row.split("\t", 8)
-            if len(panes) != 9:
+            panes = row.split("\t", 9)
+            if len(panes) != 10:
                 continue
             rows.append(row)
             if managed == "1":
-                session, window, _, _, pane, sidebar, dead, _, _ = panes
+                session, window, _, _, pane, sidebar, dead, _, _, _ = panes
                 indicators.setdefault((session, window), indicator)
                 if sidebar == "1" and dead != "1":
                     publishers.add(pane)
