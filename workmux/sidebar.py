@@ -39,14 +39,23 @@ class SidebarRow:
     state: str | None = None
     git_states: GitStatus = ()
     directory: str | None = None
+    pane: str | None = None
 
     @property
     def key(self) -> tuple[str, str | None]:
-        return self.session, "checkout:" + self.directory if self.directory is not None else self.window
+        return self.session, ("checkout:" + self.directory if self.directory is not None
+                              else self.pane or self.window)
 
 
 def _label(text: str) -> str:
     return re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", text)
+
+
+def _tab_label(tab: Tab) -> str:
+    number = str(tab.index)
+    if tab.pane is not None and tab.pane_index is not None:
+        number += f".{tab.pane_index}"
+    return f"{number}:{_label(tab.title or tab.name)}"
 
 
 def _git_suffix(states: GitStatus) -> str:
@@ -96,15 +105,17 @@ def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
             rows.append(SidebarRow(workspace.id, window,
                                    f"  {branch} ⎇ {_label(relative)}{_git_suffix(states)}",
                                    git_states=states, directory=directory))
-            for child_index, tab in enumerate(grouped[directory]):
-                connector = "└─" if child_index == len(grouped[directory]) - 1 else "├─"
+            entries = [agent for tab in grouped[directory] for agent in (tab.agents or (tab,))]
+            for child_index, tab in enumerate(entries):
+                connector = "└─" if child_index == len(entries) - 1 else "├─"
                 prefix = "     " if last else "  │  "
-                text = f"{prefix}{connector} {INDICATORS[tab.state]} {tab.index}:{_label(tab.title or tab.name)}"
-                rows.append(SidebarRow(workspace.id, tab.id, text, tab.state))
-        for index, tab in enumerate(ungrouped):
-            branch = "└─" if index == len(ungrouped) - 1 else "├─"
-            text = f"  {branch} {INDICATORS[tab.state]} {tab.index}:{_label(tab.title or tab.name)}"
-            rows.append(SidebarRow(workspace.id, tab.id, text, tab.state))
+                text = f"{prefix}{connector} {INDICATORS[tab.state]} {_tab_label(tab)}"
+                rows.append(SidebarRow(workspace.id, tab.id, text, tab.state, pane=tab.pane))
+        entries = [agent for tab in ungrouped for agent in (tab.agents or (tab,))]
+        for index, tab in enumerate(entries):
+            branch = "└─" if index == len(entries) - 1 else "├─"
+            text = f"  {branch} {INDICATORS[tab.state]} {_tab_label(tab)}"
+            rows.append(SidebarRow(workspace.id, tab.id, text, tab.state, pane=tab.pane))
     return rows
 
 
@@ -243,7 +254,9 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
 
             keys = [row.key for row in rows]
             if selected_key not in keys or not pane.active:
-                current = (pane.session, pane.window)
+                current = next((row.key for row in rows
+                                if row.session == pane.session and row.window == pane.window
+                                and row.directory is None), (pane.session, pane.window))
                 checkout = next((row.key for row in rows
                                  if row.directory and row.session == pane.session and row.window == pane.window), None)
                 parent = (pane.session, None)
@@ -309,7 +322,11 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                     elif destination.window is None:
                         tmux.select_workspace(destination.session, pane_id)
                     else:
-                        tmux.select_tab(destination.session, destination.window, pane_id)
+                        if destination.pane:
+                            tmux.select_tab(destination.session, destination.window, pane_id,
+                                            destination_pane=destination.pane)
+                        else:
+                            tmux.select_tab(destination.session, destination.window, pane_id)
                     message = ""
                     next_snapshot = 0.0
                 elif key in (27, ord("q")) and pane.active:

@@ -23,7 +23,7 @@ from workmux.cli import main
 from workmux.core import Tmux, WorkmuxError, quote_tmux
 from workmux.integration import FOCUS_HOOK_OPTION
 from workmux.layouts import LAYOUTS
-from workmux.sidebar import BRAILLE_WHEEL
+from workmux.sidebar import BRAILLE_WHEEL, sidebar_rows
 from workmux.status import WindowIndicators
 
 
@@ -1378,6 +1378,49 @@ class TmuxIntegrationTests(unittest.TestCase):
         eventually(lambda: 'fallback tab' in capture())
         self.assertIsNone(self.tmux.attention_tabs()[0].title)
         self.assertEqual(self.tmux.pane(content.id).window, content.window)
+
+    def test_split_agents_keep_own_titles_and_select_each_pane(self):
+        session, content, sidebar = self.workspace()
+        self.tmux.run('respawn-pane', '-k', '-t', content.id, 'sleep 60')
+        shell = self.tmux.run('split-window', '-h', '-t', content.id, '-P', '-F',
+                              '#{pane_id}', 'sleep 60')
+        self.tmux.run('select-pane', '-t', content.id, '-T', 'left agent')
+        self.tmux.run('select-pane', '-t', shell, '-T', 'bash')
+        self.tmux.report_agent_state(content.id, 'working', os.getpid())
+        _, _, client = self.attach(session)
+        self.tmux.run('select-pane', '-t', shell)
+        capture = lambda: self.tmux.run('capture-pane', '-p', '-t', sidebar.id)
+        eventually(lambda: 'left agent' in capture())
+        self.assertNotIn('bash', capture())
+        self.tmux.run('select-pane', '-t', shell, '-T', 'right agent')
+        self.tmux.report_agent_state(shell, 'working', os.getpid())
+        eventually(lambda: 'left agent' in capture() and 'right agent' in capture())
+        tabs = self.tmux.attention_tabs()
+        rows = sidebar_rows(self.tmux.workspaces(), tabs)
+        agent_rows = [row for row in rows if row.pane]
+        self.assertEqual({row.pane for row in agent_rows}, {content.id, shell})
+        self.assertEqual(len({row.key for row in agent_rows}), 2)
+        for row in agent_rows:
+            pane_index = self.tmux.run('display-message', '-p', '-t', row.pane, '#{pane_index}')
+            window_index = self.tmux.run('display-message', '-p', '-t', row.pane, '#{window_index}')
+            self.assertIn(f'{window_index}.{pane_index}:', row.text)
+            eventually(lambda: f'{window_index}.{pane_index}:' in capture())
+            self.tmux.select_tab(session, content.window, sidebar.id, client,
+                                 destination_pane=row.pane)
+            self.assertEqual(self.tmux.pane(session + ':').id, row.pane)
+        original_keys = {row.pane: row.key for row in agent_rows}
+        self.tmux.run('set-option', '-w', '-t', content.window, 'pane-base-index', '5')
+        renumbered = [row for row in sidebar_rows(self.tmux.workspaces(), self.tmux.attention_tabs())
+                      if row.pane]
+        for row in renumbered:
+            pane_index = self.tmux.run('display-message', '-p', '-t', row.pane, '#{pane_index}')
+            self.assertIn(f'.{pane_index}:', row.text)
+            self.assertEqual(row.key, original_keys[row.pane])
+        self.tmux.report_agent_state(shell, 'idle')
+        eventually(lambda: 'right agent' not in capture() and 'left agent' in capture())
+        with self.assertRaisesRegex(WorkmuxError, 'agent pane'):
+            self.tmux.select_tab(session, content.window, sidebar.id, client,
+                                 destination_pane='%999999')
 
     def test_agent_state_is_reported_before_enable_and_rendered_as_tree(self):
         session, pane = self.native_session()

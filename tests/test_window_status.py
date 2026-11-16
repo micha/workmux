@@ -9,9 +9,9 @@ from workmux.status import (ANIMATION_INTERVAL, BRAILLE_WHEEL, INDICATOR_OPTION,
 
 
 def row(pane, *, session="$0", window="@0", sidebar="", dead="0", managed="1",
-        indicator="", flags="*", report="", name="work", title=""):
+        indicator="", flags="*", report="", name="work", title="", pane_index=""):
     return (f"{managed}\t{indicator}\t{session}\t{window}\t1\t{flags}\t{pane}\t"
-            f"{sidebar}\t{dead}\t{report}\t{title}\t{name}")
+            f"{sidebar}\t{dead}\t{report}\t{pane_index}\t{title}\t{name}")
 
 
 class ActivitySnapshotTests(unittest.TestCase):
@@ -32,7 +32,9 @@ class ActivitySnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot.publisher, "%2")
         self.assertEqual(snapshot.indicators, {("$0", "@0"): "old", ("$0", "@1"): "",
                                                 ("$0", "@2"): ""})
-        self.assertEqual(snapshot.tabs, [Tab("$0", "@0", 1, "work", "attention", "%4")])
+        self.assertEqual(snapshot.tabs, [Tab("$0", "@0", 1, "work", "attention", "%4", agents=(
+            Tab("$0", "@0", 1, "work", "attention", "%4"),
+            Tab("$0", "@0", 1, "name\twith tab", "working", "%3")))])
 
     def test_empty_server_and_unmanaged_sidebars_have_no_publisher(self):
         for output in ("", row("%0", sidebar="1", managed="0")):

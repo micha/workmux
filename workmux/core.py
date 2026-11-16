@@ -43,6 +43,9 @@ class Tab:
     pane: str | None = None
     roots: tuple[str | None, ...] = ()
     title: str | None = None
+    pane_index: int | None = None
+    # Multiple visible agent panes; a single agent is represented by this tab.
+    agents: tuple["Tab", ...] = ()
 
 
 def _agent_state(value: str, alive: dict[int, bool]) -> str | None:
@@ -78,7 +81,7 @@ def _agent_state(value: str, alive: dict[int, bool]) -> str | None:
 _ACTIVITY_FORMAT = (
     "#{session_id}\t#{window_id}\t#{window_index}\t#{window_flags}\t#{pane_id}"
     "\t#{@workspace-sidebar}\t#{pane_dead}\t#{@workmux-agent}"
-    "\t#{s/[\t\r\n]/ /:pane_title}\t#{window_name}"
+    "\t#{pane_index}\t#{s/[\t\r\n]/ /:pane_title}\t#{window_name}"
 )
 
 
@@ -92,16 +95,18 @@ class ActivitySnapshot:
 def _attention_tabs(output: str) -> list[Tab]:
     tabs = {}
     roots = {}
+    agents = {}
     alive = {}
     for line in output.split("\n"):
-        fields = line.split("\t", 9)
-        if len(fields) != 10:
+        fields = line.split("\t", 10)
+        if len(fields) != 11:
             continue
-        session, window, index, flags, pane, sidebar, dead, report, title, name = fields
+        session, window, index, flags, pane, sidebar, dead, report, pane_index, title, name = fields
         try:
             index = int(index)
         except ValueError:
             continue
+        pane_index = int(pane_index) if pane_index.isdecimal() else None
         key = (session, window)
         native = "alert" if any(flag in flags for flag in "!#~") else "idle"
         current = tabs.get(key, Tab(session, window, index, name, native))
@@ -118,10 +123,18 @@ def _attention_tabs(output: str) -> list[Tab]:
         # Passive states classify pending alerts; working remains visible alone.
         if state in ("attention", "finished") and native != "alert":
             state = None
+        if state:
+            agents.setdefault(key, []).append(
+                Tab(session, window, index, name, state, pane,
+                    title=title.strip() or None, pane_index=pane_index))
         if state and _AGENT_PRIORITY[state] > _AGENT_PRIORITY.get(current.state, 0):
-            current = Tab(session, window, index, name, state, pane, title=title.strip() or None)
+            current = Tab(session, window, index, name, state, pane,
+                          title=title.strip() or None, pane_index=pane_index)
         tabs[key] = current
-    return sorted((replace(tab, roots=tuple(roots.get(key, ()))
+    return sorted((replace(tab, agents=tuple(sorted(agents[key],
+                               key=lambda agent: -_AGENT_PRIORITY[agent.state]))
+                           if len(agents.get(key, ())) > 1 else (),
+                           roots=tuple(roots.get(key, ()))
                            if any(root is not None for root in roots.get(key, ())) else ())
                    for key, tab in tabs.items() if tab.state != "idle"),
                   key=lambda tab: (tab.session, tab.index))
@@ -293,12 +306,12 @@ class Tmux:
             if len(fields) != 3:
                 continue
             managed, indicator, row = fields
-            panes = row.split("\t", 9)
-            if len(panes) != 10:
+            panes = row.split("\t", 10)
+            if len(panes) != 11:
                 continue
             rows.append(row)
             if managed == "1":
-                session, window, _, _, pane, sidebar, dead, _, _, _ = panes
+                session, window, _, _, pane, sidebar, dead, _, _, _, _ = panes
                 indicators.setdefault((session, window), indicator)
                 if sidebar == "1" and dead != "1":
                     publishers.add(pane)
@@ -636,7 +649,8 @@ class Tmux:
             if content is not None:
                 self.run("select-pane", "-t", content.id)
 
-    def select_tab(self, session: str, window: str, source_pane: str, client: str | None = None) -> None:
+    def select_tab(self, session: str, window: str, source_pane: str, client: str | None = None,
+                   *, destination_pane: str | None = None) -> None:
         self.require_workspace(session)
         source = self.pane(source_pane)
         self.require_workspace(source.session)
@@ -645,6 +659,10 @@ class Tmux:
         panes = self.panes(target)
         if not panes or any(pane.session != session or pane.window != window for pane in panes):
             raise WorkmuxError("This tab no longer belongs to the selected workspace.")
+        if destination_pane is not None and not any(
+            pane.id == destination_pane and not pane.sidebar for pane in panes
+        ):
+            raise WorkmuxError("This agent pane no longer belongs to the selected tab.")
         if client is None:
             clients = self.run("list-clients", "-t", source.session, "-F", "#{client_name}").splitlines()
             if len(clients) != 1:
@@ -652,6 +670,7 @@ class Tmux:
             client = clients[0]
         preferred = next((tab.pane for tab in self.attention_tabs()
                           if tab.session == session and tab.id == window), None)
+        preferred = destination_pane or preferred
         # Select the destination tab before switching sessions, avoiding an unrelated
         # tab being focused (and having its native alerts acknowledged) on the way.
         self.run("select-window", "-t", target)

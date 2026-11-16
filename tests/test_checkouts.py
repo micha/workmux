@@ -176,7 +176,7 @@ class CheckoutSidebarTests(unittest.TestCase):
             '  ├─ ⎇ worktrees/owner/ui ✓', '  │  └─ ⚠ 3:review', '  └─ ⣷ 1:coordinate'])
         self.assertEqual(rows[1].key, ('$1', 'checkout:' + api))
         self.assertEqual(rows[1].window, '@7')
-        self.assertEqual(rows[2].key, ('$1', '@2'))
+        self.assertEqual(rows[2].key, ('$1', '%2'))
         changed = sidebar_rows([self.workspace], tabs, {}, self.checkouts, {('$1', api): '@8'})
         self.assertEqual(rows[1].key, changed[1].key)
 

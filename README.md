@@ -298,17 +298,20 @@ inside that checkout:
 Working tabs use an animated filled Braille wheel; the example above shows one frame.
 Click a child row to focus that tab, including tabs in other workspaces. Keyboard
 navigation with Up/Down or j/k and Enter works for workspace, checkout, and tab rows.
-Agent rows prefer the pane needing attention when a tab contains multiple agents.
-They display that pane's terminal title when available (for example, `π - workmux`),
-falling back to the tab name. Workspace names and native-alert tab names are unchanged.
+Each active agent pane gets its own row, even when several share a tab. Selecting
+an agent row focuses that specific pane. Agent labels use `window.pane:title`
+(for example, `2.1:π - workmux`), with tmux's current window and pane indexes.
+Rows display the agent pane's terminal title regardless of which pane is focused,
+falling back to the tab name. Pane indexes can change as panes are rearranged;
+navigation tracks stable pane IDs instead. Workspace names and native-alert tab names are unchanged.
 Tabs are listed in window-index order within each group; renaming or reordering
 them does not break their click targets. Idle tabs without alerts are hidden,
 while discovered checkout rows remain visible.
 
-With several agents in one tab, pending attention takes priority over working,
-then pending finished. Attention and finished indicators classify native tmux
-alerts: clearing an alert removes the tab row unless another agent is still
-working there. Working tabs remain visible even without an alert. Native alerts
+With several agents in one tab, pending attention is listed before working,
+then pending finished. The tab's tmux status indicator uses the same priority. Attention and finished indicators classify native tmux
+alerts: clearing an alert removes passive agent rows. Working agent rows remain
+visible even without an alert. Native alerts
 appear when there is no applicable agent state to show, and all alert indicators
 follow tmux's normal clearing behavior.
 
