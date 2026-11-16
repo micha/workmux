@@ -45,7 +45,7 @@ class Tab:
     roots: tuple[str | None, ...] = ()
     title: str | None = None
     pane_index: int | None = None
-    # Multiple visible agent panes; a single agent is represented by this tab.
+    # Visible agent panes with their own roots; this tab aggregates the window.
     agents: tuple["Tab", ...] = ()
 
 
@@ -112,6 +112,7 @@ def _attention_tabs(output: str) -> list[Tab]:
         native = "alert" if any(flag in flags for flag in "!#~") else "idle"
         current = tabs.get(key, Tab(session, window, index, name, native))
         state = _agent_state(report, alive) if sidebar != "1" and dead != "1" else None
+        pane_roots = []
         if state:
             data = json.loads(report)
             reported = data.get("roots", [data.get("root")])
@@ -119,6 +120,8 @@ def _attention_tabs(output: str) -> list[Tab]:
                 reported = [None]
             for root in reported:
                 root = root if isinstance(root, str) and os.path.isabs(root) else None
+                if root not in pane_roots:
+                    pane_roots.append(root)
                 if root not in roots.setdefault(key, []):
                     roots[key].append(root)
         # Passive states classify pending alerts; working remains visible alone.
@@ -127,14 +130,14 @@ def _attention_tabs(output: str) -> list[Tab]:
         if state:
             agents.setdefault(key, []).append(
                 Tab(session, window, index, name, state, pane,
+                    roots=tuple(pane_roots) if any(root is not None for root in pane_roots) else (),
                     title=title.strip() or None, pane_index=pane_index))
         if state and _AGENT_PRIORITY[state] > _AGENT_PRIORITY.get(current.state, 0):
             current = Tab(session, window, index, name, state, pane,
                           title=title.strip() or None, pane_index=pane_index)
         tabs[key] = current
-    return sorted((replace(tab, agents=tuple(sorted(agents[key],
-                               key=lambda agent: -_AGENT_PRIORITY[agent.state]))
-                           if len(agents.get(key, ())) > 1 else (),
+    return sorted((replace(tab, agents=tuple(sorted(agents.get(key, ()),
+                               key=lambda agent: -_AGENT_PRIORITY[agent.state])),
                            roots=tuple(roots.get(key, ()))
                            if any(root is not None for root in roots.get(key, ())) else ())
                    for key, tab in tabs.items() if tab.state != "idle"),

@@ -55,7 +55,8 @@ class AgentStateTests(unittest.TestCase):
                                     Tab("$1", "@1", 2, "build", "working", "%2"),
                                     Tab("$1", "@1", 2, "build", "finished", "%1"))),
                                 Tab("$1", "@3", 3, "silence", "alert"),
-                                Tab("$2", "@5", 0, "review", "finished", "%8")])
+                                Tab("$2", "@5", 0, "review", "finished", "%8", agents=(
+                                    Tab("$2", "@5", 0, "review", "finished", "%8"),))])
         self.assertEqual(run.call_count, 1)
         self.assertEqual(run.call_args.args[:3], ("list-panes", "-a", "-F"))
 
@@ -66,8 +67,10 @@ class AgentStateTests(unittest.TestCase):
                 with patch.object(Tmux, "run", side_effect=[line.replace("{flags}", "!"),
                                                            line.replace("{flags}", "*")]) as run:
                     tmux = Tmux()
-                    self.assertEqual(tmux.attention_tabs(), [Tab("$0", "@0", 1, "work", state, "%0")])
-                    expected = [Tab("$0", "@0", 1, "work", "working", "%0")] if state == "working" else []
+                    agent = Tab("$0", "@0", 1, "work", state, "%0")
+                    self.assertEqual(tmux.attention_tabs(), [Tab("$0", "@0", 1, "work", state, "%0",
+                                                              agents=(agent,))])
+                    expected = [Tab("$0", "@0", 1, "work", "working", "%0", agents=(agent,))] if state == "working" else []
                     self.assertEqual(tmux.attention_tabs(), expected)
                     self.assertEqual(run.call_count, 2)  # Snapshotting does not mutate reports/options.
 
@@ -75,7 +78,8 @@ class AgentStateTests(unittest.TestCase):
         output = ('$0\t@0\t1\t*\t%0\t\t0\t{"state":"attention"}\t\t\twork\n'
                   '$0\t@0\t1\t*\t%1\t\t0\t{"state":"working"}\t\t\twork')
         with patch.object(Tmux, "run", return_value=output):
-            self.assertEqual(Tmux().attention_tabs(), [Tab("$0", "@0", 1, "work", "working", "%1")])
+            self.assertEqual(Tmux().attention_tabs(), [Tab("$0", "@0", 1, "work", "working", "%1",
+                agents=(Tab("$0", "@0", 1, "work", "working", "%1"),))])
 
     def test_stale_pid_does_not_mask_native_alert_and_window_name_keeps_tabs(self):
         output = '$0\t@0\t1\t!\t%0\t\t0\t{"state":"working","pid":123}\t\tstale title\tname\twith tab'
@@ -174,7 +178,45 @@ class AgentStateTests(unittest.TestCase):
             tab = Tmux().attention_tabs()[0]
         self.assertEqual(tab.state, 'attention')
         self.assertEqual(tab.roots, ('/job/api', '/job/ui', None))
+        self.assertEqual([(agent.pane, agent.roots) for agent in tab.agents],
+                         [('%1', ('/job/api',)), ('%2', ('/job/ui',)), ('%3', ())])
         self.assertEqual(run.call_count, 1)
+
+    def test_each_pane_groups_by_its_own_roots_not_other_panes_in_window(self):
+        workspace = Workspace('$1', 'job', '', '/job')
+        cases = [
+            # A workspace-level agent must not pull a worktree agent out of its checkout.
+            ([['/job'], ['/job/api']], [None, '/job/api']),
+            ([['/job/api'], ['/job/ui']], ['/job/api', '/job/ui']),
+            ([[], ['/job/api']], [None, '/job/api']),
+            ([['/job/api', '/job/ui'], ['/job/api/src']], [None, '/job/api']),
+            ([['/job/api', None], ['/job/api']], [None, '/job/api']),
+        ]
+        for roots, expected in cases:
+            for flags in ('!', '*'):
+                with self.subTest(roots=roots, flags=flags):
+                    lines = []
+                    for index, paths in enumerate(roots):
+                        report = json.dumps({'state': 'working', 'roots': paths})
+                        lines.append(f'$1\t@1\t1\t{flags}\t%{index}\t\t0\t{report}\t{index}\tagent{index}\twork')
+                    # A finished report with a different root must not affect grouping,
+                    # even when it is hidden because native alerts have been cleared.
+                    report = json.dumps({'state': 'finished', 'root': '/elsewhere'})
+                    lines.append(f'$1\t@1\t1\t{flags}\t%9\t\t0\t{report}\t9\tpassive\twork')
+                    with patch.object(Tmux, 'run', return_value='\n'.join(lines)):
+                        tabs = Tmux().attention_tabs()
+                    rows = sidebar_rows([workspace], tabs,
+                                        checkouts={'$1': ('/job/api', '/job/ui')})
+                    parents = {}
+                    directory = None
+                    for row in rows:
+                        if row.directory is not None:
+                            directory = row.directory
+                        if row.pane:
+                            parents[row.pane] = directory if row.text.startswith(('│', ' ')) else None
+                    self.assertEqual([parents[f'%{index}'] for index in range(len(roots))], expected)
+                    self.assertEqual(tabs[0].state, 'working')
+                    self.assertEqual('%9' in parents, flags == '!')
 
     def test_multiple_root_sessions_in_one_pane_are_reported_and_snapshotted(self):
         pane = Pane('%4', '$0', '@0', False, True, 95, 120, False, '/shell')

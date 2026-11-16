@@ -289,9 +289,10 @@ block sidebar navigation.
 
 ### Activity tree
 
-Tabs with agent activity or tmux alerts appear beneath their workspace, or beneath
-a discovered checkout when all live agent reports in the tab have explicit roots
-inside that checkout:
+Agent panes and tabs with native tmux alerts appear beneath their workspace.
+An agent pane appears beneath a discovered checkout when all root sessions
+reported by that pane have explicit roots inside that checkout. Other panes in
+the same window do not affect its placement:
 
 ```text
 › project-a
@@ -332,9 +333,9 @@ follow tmux's normal clearing behavior.
 Agent states come from explicit reports, not from guessing which shell commands
 are agents. Dead agent processes are ignored when the integration supplies their
 process ID. Checkout grouping uses reported harness roots, never shell cwd,
-commands, or tab associations. Tabs with unknown roots, roots spanning multiple
-checkouts, container-rooted agents, or only native alerts stay directly under the
-workspace. Bundled integrations report roots automatically; update installed
+commands, or tab associations. Agent panes with unknown roots, roots spanning
+multiple checkouts, or workspace-level roots stay directly under the workspace,
+as do native-alert tabs without an applicable agent report. Bundled integrations report roots automatically; update installed
 integrations to get grouping. Custom reporters can pass an absolute `--root`
 to `workmux agent state` (repeat `--root` when one reporter aggregates multiple
 root sessions).

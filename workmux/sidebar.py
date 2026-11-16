@@ -93,8 +93,9 @@ def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
         grouped = {directory: [] for directory in directories}
         ungrouped = []
         for tab in sorted(children.get(workspace.id, []), key=lambda tab: tab.index):
-            directory = _tab_checkout(tab, directories)
-            (grouped[directory] if directory else ungrouped).append(tab)
+            for agent in tab.agents or (tab,):
+                directory = _tab_checkout(agent, directories)
+                (grouped[directory] if directory else ungrouped).append(agent)
         total = len(directories) + len(ungrouped)
         for index, directory in enumerate(directories):
             last = index == total - 1
@@ -105,13 +106,13 @@ def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
             rows.append(SidebarRow(workspace.id, window,
                                    f"{branch} ⎇ {_label(relative)}{_git_suffix(states)}",
                                    git_states=states, directory=directory))
-            entries = [agent for tab in grouped[directory] for agent in (tab.agents or (tab,))]
+            entries = grouped[directory]
             for child_index, tab in enumerate(entries):
                 connector = "└─" if child_index == len(entries) - 1 else "├─"
                 prefix = "   " if last else "│  "
                 text = f"{prefix}{connector} {INDICATORS[tab.state]} {_tab_label(tab)}"
                 rows.append(SidebarRow(workspace.id, tab.id, text, tab.state, pane=tab.pane))
-        entries = [agent for tab in ungrouped for agent in (tab.agents or (tab,))]
+        entries = ungrouped
         for index, tab in enumerate(entries):
             branch = "└─" if index == len(entries) - 1 else "├─"
             text = f"{branch} {INDICATORS[tab.state]} {_tab_label(tab)}"

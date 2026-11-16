@@ -140,6 +140,21 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertEqual(self.tmux.workspaces()[0].checkout_max_depth, 3)
         self.assertEqual({pane.id for pane in self.tmux.panes(content.window)},
                          {content.id, sidebar.id})
+        agent = self.tmux.split(content.id, 'right')
+        self.tmux.run('respawn-pane', '-k', '-t', content.id, 'sleep 60')
+        self.tmux.run('respawn-pane', '-k', '-t', agent, 'sleep 60')
+        self.tmux.run('select-pane', '-t', content.id, '-T', 'workspace-agent')
+        self.tmux.run('select-pane', '-t', agent, '-T', 'worktree-agent')
+        self.tmux.report_agent_state(content.id, 'working', os.getpid(), str(workspace))
+        self.tmux.report_agent_state(agent, 'working', os.getpid(), str(linked))
+        eventually(lambda: any('│  └─ ' + frame in capture() for frame in BRAILLE_WHEEL)
+                   and 'worktree-agent' in capture() and 'workspace-agent' in capture())
+        rows = sidebar_rows(self.tmux.workspaces(), self.tmux.attention_tabs(),
+                            checkouts={session: (str(linked),)})
+        self.assertTrue(next(row for row in rows if row.pane == agent).text.startswith('│  └─'))
+        self.assertTrue(next(row for row in rows if row.pane == content.id).text.startswith('└─'))
+        self.tmux.report_agent_state(agent, 'working', os.getpid(), str(workspace))
+        eventually(lambda: '│  └─' not in capture() and 'worktree-agent' in capture())
 
     @unittest.skipUnless(shutil.which("git"), "Git is optional")
     def test_container_worktrees_lazy_tabs_root_grouping_and_safe_removal(self):
