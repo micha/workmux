@@ -157,7 +157,7 @@ class SidebarLoopTests(unittest.TestCase):
         tmux.select_workspace.assert_not_called()
         tmux.select_tab.assert_not_called()
 
-    def test_click_checkout_and_nested_agent_target_distinct_stable_identities(self):
+    def test_click_checkout_and_sibling_agent_target_distinct_stable_identities(self):
         path = '/jobs/repos/api'
         tabs = [Tab('$0', '@7', 1, 'agent', 'working', roots=(path,))]
         _, tmux = self.run_loop([curses.KEY_MOUSE, curses.KEY_MOUSE],

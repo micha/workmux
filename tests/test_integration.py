@@ -132,12 +132,12 @@ class TmuxIntegrationTests(unittest.TestCase):
         capture = lambda: self.tmux.run('capture-pane', '-p', '-t', sidebar.id)
         self.assertEqual(self.tmux.workspaces()[0].checkout_max_depth, 2)
         self.tmux.run('set-option', '-g', '@workmux-checkout-max-depth', '3')
-        eventually(lambda: '⎇ worktrees/adzerk/bifrost' in capture(), timeout=10)
+        eventually(lambda: '⎇ bifrost' in capture(), timeout=10)
         self.tmux.run('set-option', '-t', session, '@workmux-checkout-max-depth', '0')
-        eventually(lambda: '⎇ worktrees/adzerk/bifrost' not in capture())
+        eventually(lambda: '⎇ bifrost' not in capture())
         self.assertEqual(self.tmux.workspaces()[0].checkout_max_depth, 0)
         self.tmux.run('set-option', '-u', '-t', session, '@workmux-checkout-max-depth')
-        eventually(lambda: '⎇ worktrees/adzerk/bifrost' in capture(), timeout=10)
+        eventually(lambda: '⎇ bifrost' in capture(), timeout=10)
         self.assertEqual(self.tmux.workspaces()[0].checkout_max_depth, 3)
         self.assertEqual({pane.id for pane in self.tmux.panes(content.window)},
                          {content.id, sidebar.id})
@@ -148,17 +148,17 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.run('select-pane', '-t', agent, '-T', 'worktree-agent')
         self.tmux.report_agent_state(content.id, 'working', os.getpid(), str(workspace))
         self.tmux.report_agent_state(agent, 'working', os.getpid(), str(linked))
-        eventually(lambda: any(frame + ' │  └─ ✦' in capture() for frame in BRAILLE_WHEEL)
+        eventually(lambda: any(frame + ' └─ ✦' in capture() for frame in BRAILLE_WHEEL)
                    and 'worktree-agent' in capture() and 'workspace-agent' in capture())
         rows = sidebar_rows(self.tmux.workspaces(), self.tmux.attention_tabs(),
                             checkouts={session: (str(linked),)})
-        self.assertTrue(next(row for row in rows if row.pane == agent).text.startswith('│  └─'))
-        self.assertTrue(next(row for row in rows if row.pane == content.id).text.startswith('└─'))
+        self.assertTrue(next(row for row in rows if row.pane == agent).text.startswith('└─'))
+        self.assertTrue(next(row for row in rows if row.pane == content.id).text.startswith('├─'))
         self.tmux.report_agent_state(agent, 'working', os.getpid(), str(workspace))
         eventually(lambda: '│  └─' not in capture() and 'worktree-agent' in capture())
 
     @unittest.skipUnless(shutil.which("git"), "Git is optional")
-    def test_container_worktrees_lazy_tabs_root_grouping_and_safe_removal(self):
+    def test_container_worktrees_lazy_tabs_flat_agents_and_safe_removal(self):
         root = Path(self.temporary.name)
         source = root / 'source'
         job = root / 'job'
@@ -182,7 +182,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         sidebar = next(pane for pane in self.tmux.panes(original.window) if pane.sidebar)
         self.attach(session)
         capture = lambda: self.tmux.run('capture-pane', '-p', '-t', sidebar.id)
-        eventually(lambda: "⎇ trees/org/api ' $; ✓" in capture(), 'linked worktree was not discovered', timeout=10)
+        eventually(lambda: "⎇ api ' $; ✓" in capture(), 'linked worktree was not discovered', timeout=10)
         self.assertEqual(len(self.tmux.run('list-windows', '-t', session).splitlines()), 1)
         self.tmux.toggle_sidebar(original.id)
         self.tmux.run('send-keys', '-t', sidebar.id, 'Down', 'Enter')
@@ -199,10 +199,10 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertEqual(len(self.tmux.run('list-windows', '-t', session).splitlines()), 2)
         self.tmux.report_agent_state(content.id, 'working', os.getpid(), str(linked))
         self.tmux.select_tab(session, original.window, content.id)
-        eventually(lambda: any(frame + '    └─ ✦' in capture() for frame in BRAILLE_WHEEL),
-                   'agent tab was not nested below its checkout')
+        eventually(lambda: any(frame + ' └─ ✦' in capture() for frame in BRAILLE_WHEEL),
+                   'agent tab was not a direct workspace child')
         git('worktree', 'remove', '--force', str(linked))
-        eventually(lambda: '⎇ trees/org/' not in capture(), 'removed checkout remained listed', timeout=12)
+        eventually(lambda: "⎇ api ' $;" not in capture(), 'removed checkout remained listed', timeout=12)
         self.assertEqual(self.tmux.pane(content.id).window, content.window)
         self.assertTrue(pane_contains_any(self.tmux, sidebar.id, BRAILLE_WHEEL))
         with self.assertRaises(WorkmuxError):

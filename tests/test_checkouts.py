@@ -1,4 +1,4 @@
-"""Generic container discovery, cached checks, and harness-root sidebar grouping."""
+"""Generic container discovery, cached checks, and flat workspace sidebar children."""
 
 from concurrent.futures import Future
 import os
@@ -208,7 +208,7 @@ class CheckoutSidebarTests(unittest.TestCase):
         self.paths = ('/job/worktrees/owner/api', '/job/worktrees/owner/ui')
         self.checkouts = {'$1': self.paths}
 
-    def test_agents_nest_by_explicit_harness_roots_not_tab_associations(self):
+    def test_checkouts_and_agents_are_siblings_with_basename_checkout_labels(self):
         api, ui = self.paths
         tabs = [Tab('$1', '@1', 1, 'coordinate', 'working', '%1', ('/job',)),
                 Tab('$1', '@2', 2, 'implement', 'working', '%2', (api + '/src',)),
@@ -216,11 +216,11 @@ class CheckoutSidebarTests(unittest.TestCase):
         rows = sidebar_rows([self.workspace], tabs, {api: ('dirty', 'ahead'), ui: ('clean',)},
                             self.checkouts, {('$1', api): '@7'})
         self.assertEqual([row.text for row in rows], [
-            '1:job', '├─ ⎇ worktrees/owner/api ● ↑', '│  └─ ✦ 2:implement',
-            '├─ ⎇ worktrees/owner/ui ✓', '│  └─ ✦ 3:review', '└─ ✦ 1:coordinate'])
+            '1:job', '├─ ⎇ api ● ↑', '├─ ⎇ ui ✓', '├─ ✦ 1:coordinate',
+            '├─ ✦ 2:implement', '└─ ✦ 3:review'])
         self.assertEqual(rows[1].key, ('$1', 'checkout:' + api))
         self.assertEqual(rows[1].window, '@7')
-        self.assertEqual(rows[2].key, ('$1', '%2'))
+        self.assertEqual(rows[4].key, ('$1', '%2'))
         changed = sidebar_rows([self.workspace], tabs, {}, self.checkouts, {('$1', api): '@8'})
         self.assertEqual(rows[1].key, changed[1].key)
 
@@ -233,13 +233,22 @@ class CheckoutSidebarTests(unittest.TestCase):
                                     {}, self.checkouts)
                 self.assertEqual(rows[-1].text, '└─ ✦ 2:mixed')
 
-    def test_multiple_roots_within_one_checkout_and_deepest_match(self):
+    def test_nested_checkout_does_not_indent_its_agent(self):
         api, ui = self.paths
         nested = api + '/nested'
         tabs = [Tab('$1', '@2', 2, 'agent', 'working', roots=(nested, nested + '/src'))]
         rows = sidebar_rows([self.workspace], tabs, {}, {'$1': (api, nested)})
-        self.assertEqual(rows[-1].text, '   └─ ✦ 2:agent')
+        self.assertEqual(rows[-1].text, '└─ ✦ 2:agent')
         self.assertEqual(rows[-2].directory, nested)
+
+    def test_duplicate_checkout_basenames_keep_distinct_paths_and_keys(self):
+        paths = ('/job/one/repo', '/job/two/repo')
+        rows = sidebar_rows([self.workspace], [], checkouts={'$1': paths},
+                            checkout_windows={('$1', paths[0]): '@7', ('$1', paths[1]): '@8'})
+        self.assertEqual([row.text for row in rows[1:]], ['├─ ⎇ repo', '└─ ⎇ repo'])
+        self.assertEqual([row.directory for row in rows[1:]], list(paths))
+        self.assertEqual([row.window for row in rows[1:]], ['@7', '@8'])
+        self.assertEqual(len({row.key for row in rows}), 3)
 
     def test_removed_checkout_does_not_hide_its_agent_tab(self):
         tab = Tab('$1', '@2', 2, 'agent', 'working', roots=(self.paths[0],))

@@ -182,41 +182,35 @@ class AgentStateTests(unittest.TestCase):
                          [('%1', ('/job/api',)), ('%2', ('/job/ui',)), ('%3', ())])
         self.assertEqual(run.call_count, 1)
 
-    def test_each_pane_groups_by_its_own_roots_not_other_panes_in_window(self):
+    def test_each_pane_is_a_workspace_child_regardless_of_reported_roots(self):
         workspace = Workspace('$1', 'job', '', '/job')
         cases = [
-            # A workspace-level agent must not pull a worktree agent out of its checkout.
-            ([['/job'], ['/job/api']], [None, '/job/api']),
-            ([['/job/api'], ['/job/ui']], ['/job/api', '/job/ui']),
-            ([[], ['/job/api']], [None, '/job/api']),
-            ([['/job/api', '/job/ui'], ['/job/api/src']], [None, '/job/api']),
-            ([['/job/api', None], ['/job/api']], [None, '/job/api']),
+            [['/job'], ['/job/api']],
+            [['/job/api'], ['/job/ui']],
+            [[], ['/job/api']],
+            [['/job/api', '/job/ui'], ['/job/api/src']],
+            [['/job/api', None], ['/job/api']],
         ]
-        for roots, expected in cases:
+        for roots in cases:
             for flags in ('!', '*'):
                 with self.subTest(roots=roots, flags=flags):
                     lines = []
                     for index, paths in enumerate(roots):
                         report = json.dumps({'state': 'working', 'roots': paths})
                         lines.append(f'$1\t@1\t1\t{flags}\t%{index}\t\t0\t{report}\t{index}\tagent{index}\twork')
-                    # A finished report with a different root must not affect grouping,
-                    # even when it is hidden because native alerts have been cleared.
+                    # Passive reports still follow native alert visibility.
                     report = json.dumps({'state': 'finished', 'root': '/elsewhere'})
                     lines.append(f'$1\t@1\t1\t{flags}\t%9\t\t0\t{report}\t9\tpassive\twork')
                     with patch.object(Tmux, 'run', return_value='\n'.join(lines)):
                         tabs = Tmux().attention_tabs()
                     rows = sidebar_rows([workspace], tabs,
                                         checkouts={'$1': ('/job/api', '/job/ui')})
-                    parents = {}
-                    directory = None
-                    for row in rows:
-                        if row.directory is not None:
-                            directory = row.directory
-                        if row.pane:
-                            parents[row.pane] = directory if row.text.startswith(('│', ' ')) else None
-                    self.assertEqual([parents[f'%{index}'] for index in range(len(roots))], expected)
+                    agents = {row.pane: row for row in rows if row.pane}
+                    for row in agents.values():
+                        self.assertTrue(row.text.startswith(('├─ ✦', '└─ ✦')))
+                    self.assertTrue(all(f'%{index}' in agents for index in range(len(roots))))
                     self.assertEqual(tabs[0].state, 'working')
-                    self.assertEqual('%9' in parents, flags == '!')
+                    self.assertEqual('%9' in agents, flags == '!')
 
     def test_multiple_root_sessions_in_one_pane_are_reported_and_snapshotted(self):
         pane = Pane('%4', '$0', '@0', False, True, 95, 120, False, '/shell')

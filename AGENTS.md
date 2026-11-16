@@ -88,10 +88,10 @@
 - Checkout rows use stable session IDs and checkout paths; associated tabs use
   explicit window metadata, never shell cwd or branch names. Open tabs lazily,
   revalidate containment before opening, and never destroy content on checkout removal.
-  Group each agent pane independently when all of its live reported harness
-  roots resolve to the same discovered checkout; unknown or mixed roots within
-  that pane remain at workspace level. Other panes' roots must not affect its
-  placement; keep window-status priority aggregation separate.
+  Render checkouts and agent panes as direct workspace children, independent of
+  reported roots. Checkout labels show only the directory basename; preserve full
+  paths in row identities and click targets, including duplicate basenames.
+  Keep window-status priority aggregation separate.
 - Tree rows and click targets use stable session/window IDs, not rendered indexes
   or names. Prefer attention over working over finished when agents share a tab.
 - Pi state reports must be serialized and best-effort so a missing workmux command

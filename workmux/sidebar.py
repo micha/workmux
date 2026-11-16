@@ -7,7 +7,7 @@ import re
 import time
 import unicodedata
 
-from .checkouts import CheckoutCache, contains
+from .checkouts import CheckoutCache
 from .core import Tab, Tmux, WorkmuxError, Workspace
 from .git_status import GitStatus, GitStatusCache
 from .status import ANIMATION_INTERVAL, BRAILLE_WHEEL, INDICATORS, WindowIndicators, working_indicator
@@ -64,18 +64,6 @@ def _git_suffix(states: GitStatus) -> str:
     return " " + " ".join(GIT_INDICATORS[state] for state in states) if states else ""
 
 
-def _tab_checkout(tab: Tab, directories: tuple[str, ...]) -> str | None:
-    if not tab.roots or None in tab.roots:
-        return None
-    matches = set()
-    for root in tab.roots:
-        candidates = [directory for directory in directories if contains(directory, root)]
-        if not candidates:
-            return None
-        matches.add(max(candidates, key=len))
-    return next(iter(matches)) if len(matches) == 1 else None
-
-
 def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
                  git_states: dict[str, GitStatus | None] | None = None,
                  checkouts: dict[str, tuple[str, ...]] | None = None,
@@ -92,29 +80,18 @@ def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
         rows.append(SidebarRow(workspace.id, None,
                                f"{position}:{_label(workspace.name)}{_git_suffix(states)}", git_states=states))
         directories = tuple(sorted(set(checkouts.get(workspace.id, ()))))
-        grouped = {directory: [] for directory in directories}
-        ungrouped = []
-        for tab in sorted(children.get(workspace.id, []), key=lambda tab: tab.index):
-            for agent in tab.agents or (tab,):
-                directory = _tab_checkout(agent, directories)
-                (grouped[directory] if directory else ungrouped).append(agent)
-        total = len(directories) + len(ungrouped)
+        entries = [agent for tab in sorted(children.get(workspace.id, []), key=lambda tab: tab.index)
+                   for agent in tab.agents or (tab,)]
+        total = len(directories) + len(entries)
         for index, directory in enumerate(directories):
             last = index == total - 1
             branch = "└─" if last else "├─"
-            relative = str(Path(directory).relative_to(workspace.directory))
+            name = Path(directory).name
             states = git_states.get(directory) or ()
             window = checkout_windows.get((workspace.id, directory))
             rows.append(SidebarRow(workspace.id, window,
-                                   f"{branch} ⎇ {_label(relative)}{_git_suffix(states)}",
+                                   f"{branch} ⎇ {_label(name)}{_git_suffix(states)}",
                                    git_states=states, directory=directory))
-            entries = grouped[directory]
-            for child_index, tab in enumerate(entries):
-                connector = "└─" if child_index == len(entries) - 1 else "├─"
-                prefix = "   " if last else "│  "
-                text = f"{prefix}{connector} {_tab_label(tab)}"
-                rows.append(SidebarRow(workspace.id, tab.id, text, tab.state, pane=tab.pane))
-        entries = ungrouped
         for index, tab in enumerate(entries):
             branch = "└─" if index == len(entries) - 1 else "├─"
             text = f"{branch} {_tab_label(tab)}"

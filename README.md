@@ -208,16 +208,20 @@ support and a curses build that exposes the corresponding wheel buttons.
 
 A workspace may be a repository or a plain container directory holding job
 documents and several independent repositories/worktrees. Discovered checkouts
-appear as `⎇` rows with paths relative to the workspace's saved directory:
+appear as `⎇` rows labeled with their directory's last component. Checkouts and
+agents are direct children of the workspace:
 
 ```text
 › 1:job
-  ├─ ⎇ worktrees/team/backend ● ↑
-⣷ │  └─ ✦ 2.0:implement
-  ├─ ⎇ worktrees/team/frontend ✓
-⚠ │  └─ ✦ 3.0:review
-⣷ └─ ✦ 1.0:coordinate
+  ├─ ⎇ backend ● ↑
+  ├─ ⎇ frontend ✓
+⣷ ├─ ✦ 1.0:coordinate
+⣷ ├─ ✦ 2.0:implement
+⚠ └─ ✦ 3.0:review
 ```
+
+Checkout labels may repeat when directories share a basename; each row still
+targets its own full checkout path.
 
 Click a checkout row, or select it with Up/Down or j/k and Enter, to open a tab
 in that directory **within the parent workspace**. Later selections focus that
@@ -289,10 +293,9 @@ block sidebar navigation.
 
 ### Activity tree
 
-Agent panes and tabs with native tmux alerts appear beneath their workspace.
-An agent pane appears beneath a discovered checkout when all root sessions
-reported by that pane have explicit roots inside that checkout. Other panes in
-the same window do not affect its placement:
+Agent panes and tabs with native tmux alerts appear directly beneath their
+workspace, alongside discovered checkouts. Agents are not nested beneath
+checkouts, regardless of their reported working directories:
 
 ```text
 › project-a
@@ -322,7 +325,7 @@ an agent row focuses that specific pane. Agent labels use `window.pane:title`
 Rows display the agent pane's terminal title regardless of which pane is focused,
 falling back to the tab name. Pane indexes can change as panes are rearranged;
 navigation tracks stable pane IDs instead. Workspace names and native-alert tab names are unchanged.
-Tabs are listed in window-index order within each group; renaming or reordering
+Tabs are listed in window-index order beneath the checkout rows; renaming or reordering
 them does not break their click targets. Idle tabs without alerts are hidden,
 while discovered checkout rows remain visible.
 
@@ -335,13 +338,10 @@ follow tmux's normal clearing behavior.
 
 Agent states come from explicit reports, not from guessing which shell commands
 are agents. Dead agent processes are ignored when the integration supplies their
-process ID. Checkout grouping uses reported harness roots, never shell cwd,
-commands, or tab associations. Agent panes with unknown roots, roots spanning
-multiple checkouts, or workspace-level roots stay directly under the workspace,
-as do native-alert tabs without an applicable agent report. Bundled integrations report roots automatically; update installed
-integrations to get grouping. Custom reporters can pass an absolute `--root`
-to `workmux agent state` (repeat `--root` when one reporter aggregates multiple
-root sessions).
+process ID. Reported roots do not affect sidebar placement: every agent row is a
+direct child of its workspace. Bundled integrations still report roots as
+metadata; custom reporters can pass an absolute `--root` to `workmux agent state`
+(repeat `--root` when one reporter aggregates multiple root sessions).
 
 Install an [agent integration](#optional-agent-integrations) for automatic reports.
 Native tmux alerts need no agent integration; their monitoring settings remain
