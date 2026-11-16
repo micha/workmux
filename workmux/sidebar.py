@@ -103,18 +103,18 @@ def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
             states = git_states.get(directory) or ()
             window = checkout_windows.get((workspace.id, directory))
             rows.append(SidebarRow(workspace.id, window,
-                                   f"  {branch} ⎇ {_label(relative)}{_git_suffix(states)}",
+                                   f"{branch} ⎇ {_label(relative)}{_git_suffix(states)}",
                                    git_states=states, directory=directory))
             entries = [agent for tab in grouped[directory] for agent in (tab.agents or (tab,))]
             for child_index, tab in enumerate(entries):
                 connector = "└─" if child_index == len(entries) - 1 else "├─"
-                prefix = "     " if last else "  │  "
+                prefix = "   " if last else "│  "
                 text = f"{prefix}{connector} {INDICATORS[tab.state]} {_tab_label(tab)}"
                 rows.append(SidebarRow(workspace.id, tab.id, text, tab.state, pane=tab.pane))
         entries = [agent for tab in ungrouped for agent in (tab.agents or (tab,))]
         for index, tab in enumerate(entries):
             branch = "└─" if index == len(entries) - 1 else "├─"
-            text = f"  {branch} {INDICATORS[tab.state]} {_tab_label(tab)}"
+            text = f"{branch} {INDICATORS[tab.state]} {_tab_label(tab)}"
             rows.append(SidebarRow(workspace.id, tab.id, text, tab.state, pane=tab.pane))
     return rows
 

@@ -59,6 +59,26 @@ class CheckoutTests(unittest.TestCase):
             cache.close()
             executor.return_value.shutdown.assert_called_once_with(wait=False, cancel_futures=True)
 
+    def test_cache_depth_changes_cancel_old_scan_and_share_matching_settings(self):
+        first, changed, other = Future(), Future(), Future()
+        with patch('workmux.checkouts.ThreadPoolExecutor') as executor:
+            executor.return_value.submit.side_effect = [first, changed, other]
+            cache = CheckoutCache()
+            workspaces = [Workspace('$1', 'one', '', '/job', 2),
+                          Workspace('$2', 'two', '', '/job', 2)]
+            cache.snapshot(workspaces)
+            executor.return_value.submit.assert_called_once_with(discover_checkouts, '/job', 2)
+            updated = [Workspace('$1', 'one', '', '/job', 3),
+                       Workspace('$2', 'two', '', '/job', 3)]
+            self.assertEqual(cache.snapshot(updated), {'$1': (), '$2': ()})
+            self.assertTrue(first.cancelled())
+            executor.return_value.submit.assert_called_with(discover_checkouts, '/job', 3)
+            changed.set_result(('/job/repo',))
+            self.assertEqual(cache.snapshot(updated), {'$1': ('/job/repo',), '$2': ('/job/repo',)})
+            cache.snapshot([updated[0], workspaces[1]])
+            self.assertEqual(executor.return_value.submit.call_count, 3)
+            cache.close()
+
     def test_git_checks_are_shared_by_checkout_paths_and_workspace_roots(self):
         first, second = Future(), Future()
         with patch('workmux.git_status.ThreadPoolExecutor') as executor:
@@ -141,12 +161,36 @@ class CheckoutRepositoryTests(unittest.TestCase):
         alias.symlink_to(self.job, target_is_directory=True)
         self.assertEqual(discover_checkouts(str(alias)), (str(nested),))
 
-    def test_checkout_content_is_not_scanned_even_when_git_is_unavailable(self):
+    def test_nested_foreign_worktree_inside_repository_and_configured_depth(self):
         checkout = self.repo(self.job / 'repo')
+        source = self.repo(self.root / 'external-source')
+        linked = checkout / 'worktrees' / 'adzerk' / 'bifrost'
+        linked.parent.mkdir(parents=True)
+        self.git(source, 'worktree', 'add', '-b', 'feature', str(linked))
+        self.assertEqual(discover_checkouts(str(checkout)), (str(linked),))
+        self.assertEqual(discover_checkouts(str(checkout), 2), ())
+        self.assertEqual(discover_checkouts(str(checkout), 3), (str(linked),))
+        self.assertEqual(discover_checkouts(str(checkout), 0), ())
+        nested = self.repo(linked / 'nested')
+        self.assertEqual(discover_checkouts(str(checkout), 3), (str(linked),))
+        self.assertEqual(discover_checkouts(str(checkout), 4), tuple(sorted((str(linked), str(nested)))))
+
+    def test_registered_worktrees_obey_depth_limit(self):
+        checkout = self.repo(self.job / 'repo')
+        linked = checkout / 'trees' / 'feature'
+        linked.parent.mkdir()
+        self.git(checkout, 'worktree', 'add', '-b', 'feature', str(linked))
+        self.assertEqual(discover_checkouts(str(checkout), 1), ())
+        self.assertEqual(discover_checkouts(str(checkout), 2), (str(linked),))
+
+    def test_directory_walk_skips_git_contents_even_when_git_is_unavailable(self):
+        checkout = self.repo(self.job / 'repo')
+        (checkout / 'content').mkdir()
         with patch('workmux.checkouts._git', return_value=None), \
-                patch('workmux.checkouts.os.scandir') as scandir:
+                patch('workmux.checkouts.os.scandir', wraps=os.scandir) as scandir:
             self.assertEqual(discover_checkouts(str(checkout)), ())
-            scandir.assert_not_called()
+        self.assertEqual({call.args[0] for call in scandir.call_args_list},
+                         {str(checkout), str(checkout / 'content')})
 
     def test_directory_and_query_budgets(self):
         self.repo(self.job / 'repo')
@@ -172,8 +216,8 @@ class CheckoutSidebarTests(unittest.TestCase):
         rows = sidebar_rows([self.workspace], tabs, {api: ('dirty', 'ahead'), ui: ('clean',)},
                             self.checkouts, {('$1', api): '@7'})
         self.assertEqual([row.text for row in rows], [
-            '1:job', '  ├─ ⎇ worktrees/owner/api ● ↑', '  │  └─ ⣷ 2:implement',
-            '  ├─ ⎇ worktrees/owner/ui ✓', '  │  └─ ⚠ 3:review', '  └─ ⣷ 1:coordinate'])
+            '1:job', '├─ ⎇ worktrees/owner/api ● ↑', '│  └─ ⣷ 2:implement',
+            '├─ ⎇ worktrees/owner/ui ✓', '│  └─ ⚠ 3:review', '└─ ⣷ 1:coordinate'])
         self.assertEqual(rows[1].key, ('$1', 'checkout:' + api))
         self.assertEqual(rows[1].window, '@7')
         self.assertEqual(rows[2].key, ('$1', '%2'))
@@ -187,18 +231,18 @@ class CheckoutSidebarTests(unittest.TestCase):
             with self.subTest(roots=roots):
                 rows = sidebar_rows([self.workspace], [Tab('$1', '@2', 2, 'mixed', 'working', roots=roots)],
                                     {}, self.checkouts)
-                self.assertEqual(rows[-1].text, '  └─ ⣷ 2:mixed')
+                self.assertEqual(rows[-1].text, '└─ ⣷ 2:mixed')
 
     def test_multiple_roots_within_one_checkout_and_deepest_match(self):
         api, ui = self.paths
         nested = api + '/nested'
         tabs = [Tab('$1', '@2', 2, 'agent', 'working', roots=(nested, nested + '/src'))]
         rows = sidebar_rows([self.workspace], tabs, {}, {'$1': (api, nested)})
-        self.assertEqual(rows[-1].text, '     └─ ⣷ 2:agent')
+        self.assertEqual(rows[-1].text, '   └─ ⣷ 2:agent')
         self.assertEqual(rows[-2].directory, nested)
 
     def test_removed_checkout_does_not_hide_its_agent_tab(self):
         tab = Tab('$1', '@2', 2, 'agent', 'working', roots=(self.paths[0],))
         rows = sidebar_rows([self.workspace], [tab], {}, {})
         self.assertEqual(rows[-1].key, ('$1', '@2'))
-        self.assertEqual(rows[-1].text, '  └─ ⣷ 2:agent')
+        self.assertEqual(rows[-1].text, '└─ ⣷ 2:agent')

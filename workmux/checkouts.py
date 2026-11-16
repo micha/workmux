@@ -52,9 +52,10 @@ def worktree_paths(output: bytes) -> tuple[str, ...]:
                  if field.startswith(b"worktree "))
 
 
-def discover_checkouts(directory: str) -> tuple[str, ...]:
+def discover_checkouts(directory: str, max_depth: int | None = None) -> tuple[str, ...]:
     if not directory:
         return ()
+    max_depth = MAX_DEPTH if max_depth is None else max(0, max_depth)
     root = os.path.realpath(directory)
     deadline = time.monotonic() + SCAN_TIMEOUT
     found = set()
@@ -74,6 +75,8 @@ def discover_checkouts(directory: str) -> tuple[str, ...]:
         # an ancestor of a registered worktree. User-selected workspace roots
         # themselves may be symlinks and have already been resolved.
         if any(char in path for char in "\t\r\n") or not contains(root, path, strict=True):
+            return
+        if len(Path(path).relative_to(root).parts) > max_depth:
             return
         if (len(found) >= MAX_CHECKOUTS or os.path.realpath(path) != path
                 or not os.path.isdir(path) or not os.path.lexists(os.path.join(path, ".git"))):
@@ -99,8 +102,8 @@ def discover_checkouts(directory: str) -> tuple[str, ...]:
         return top == path
 
     # Also find linked worktrees beneath a saved subdirectory of a repository.
-    root_is_checkout = inspect(root)
-    pending = [] if root_is_checkout or os.path.lexists(os.path.join(root, ".git")) else [(root, 0)]
+    inspect(root)
+    pending = [(root, 0)]
     visited = examined = 0
     while (pending and visited < MAX_DIRECTORIES and examined < MAX_ENTRIES
            and time.monotonic() < deadline):
@@ -112,8 +115,7 @@ def discover_checkouts(directory: str) -> tuple[str, ...]:
                     continue  # It may have become a symlink since being queued.
                 if os.path.lexists(os.path.join(path, ".git")):
                     inspect(path)
-                    continue  # Never crawl checkout content, even if Git fails.
-            if depth < MAX_DEPTH:
+            if depth < max_depth:
                 children = []
                 with os.scandir(path) as entries:
                     for entry in entries:
@@ -142,25 +144,29 @@ class CheckoutCache:
 
     def __init__(self):
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="workmux-checkouts")
-        self.entries: dict[str, _Entry] = {}
+        self.entries: dict[tuple[str, int], _Entry] = {}
 
     def snapshot(self, workspaces: list[Workspace]) -> dict[str, tuple[str, ...]]:
         now = time.monotonic()
-        directories = {workspace.directory for workspace in workspaces if workspace.directory}
-        for directory in self.entries.keys() - directories:
-            self.entries.pop(directory).future.cancel()
-        for directory in directories:
-            entry = self.entries.get(directory)
+        keys = {workspace.id: (workspace.directory,
+                              MAX_DEPTH if workspace.checkout_max_depth is None
+                              else workspace.checkout_max_depth)
+                for workspace in workspaces if workspace.directory}
+        for key in self.entries.keys() - set(keys.values()):
+            self.entries.pop(key).future.cancel()
+        for key in set(keys.values()):
+            directory, depth = key
+            entry = self.entries.get(key)
             if entry is None:
-                self.entries[directory] = _Entry(self.executor.submit(discover_checkouts, directory),
-                                                 next_poll=now + POLL_INTERVAL)
+                self.entries[key] = _Entry(self.executor.submit(discover_checkouts, directory, depth),
+                                           next_poll=now + POLL_INTERVAL)
             elif entry.future.done():
                 entry.paths = entry.future.result()
                 if now >= entry.next_poll:
                     entry.next_poll = now + POLL_INTERVAL
-                    entry.future = self.executor.submit(discover_checkouts, directory)
-        return {workspace.id: self.entries[workspace.directory].paths
-                if workspace.directory in self.entries else () for workspace in workspaces}
+                    entry.future = self.executor.submit(discover_checkouts, directory, depth)
+        return {workspace.id: self.entries[keys[workspace.id]].paths
+                if workspace.id in keys else () for workspace in workspaces}
 
     def close(self) -> None:
         self.executor.shutdown(wait=False, cancel_futures=True)

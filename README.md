@@ -212,11 +212,11 @@ appear as `⎇` rows with paths relative to the workspace's saved directory:
 
 ```text
 1:job
-  ├─ ⎇ worktrees/team/backend ● ↑
-  │  └─ ⣷ 2:implement
-  ├─ ⎇ worktrees/team/frontend ✓
-  │  └─ ⚠ 3:review
-  └─ ⣷ 1:coordinate
+├─ ⎇ worktrees/team/backend ● ↑
+│  └─ ⣷ 2:implement
+├─ ⎇ worktrees/team/frontend ✓
+│  └─ ⚠ 3:review
+└─ ⣷ 1:coordinate
 ```
 
 Click a checkout row, or select it with Up/Down or j/k and Enter, to open a tab
@@ -225,17 +225,31 @@ associated tab, even if it has been renamed or its shell has changed directory.
 Closing the tab allows the next selection to open a fresh one. Discovery itself
 creates no tabs, sessions, repositories, branches, or worktrees.
 
-Discovery runs in the background, normally every five seconds. In a plain
-container it recognizes `.git` directories and linked-worktree `.git` files up
-to six directory levels below the saved directory; no particular directory or
-branch naming convention is required. It stops descending inside a checkout,
-using Git's registered worktrees to find additional checkouts beneath the
-workspace. Worktrees outside the workspace are not listed. Discovered directory
+Discovery runs in the background, normally every five seconds. It recognizes
+`.git` directories and linked-worktree `.git` files up to six directory levels
+below the saved directory, including inside existing checkouts. No particular
+directory or branch naming convention is required. Git's registered worktrees
+are also checked, subject to the same containment and depth limits. Worktrees
+outside the workspace are not listed. Discovery walks directory names only:
+file contents and `.git` contents are never scanned. Discovered directory
 symlinks are not followed, and missing directories are skipped. Each scan is
 limited to 2,000 directories, 16,000 directory entries, 128 Git queries, 64 checkouts,
 and a four-second time budget; large trees may therefore yield only a partial
 list. Paths containing tabs or
 newlines are unsupported, as with workspace directories.
+
+Set the maximum depth globally or override it for one workspace session:
+
+```sh
+tmux set-option -g @workmux-checkout-max-depth 6
+tmux set-option -t my-workspace @workmux-checkout-max-depth 3
+```
+
+Changes trigger a new background scan without restarting sidebars. Depth counts
+directory levels below the saved workspace directory: `worktrees/adzerk/bifrost`
+is depth 3. A value of `0` disables discovery below the workspace root. Unset,
+negative, or invalid values use the default of 6. Higher depths remain subject
+to the other scan budgets.
 
 Every checkout has its own Git indicators. The workspace's indicators still
 refer only to its saved directory, not an aggregate of nested repositories.
@@ -281,11 +295,11 @@ inside that checkout:
 
 ```text
 › project-a
-    ├─ ⣷ 1:build
-    └─ ⚠ 2:review
+  ├─ ⣷ 1:build
+  └─ ⚠ 2:review
   project-b
-    ├─ ✓ 1:changes
-    └─ ● 2:logs
+  ├─ ✓ 1:changes
+  └─ ● 2:logs
 ```
 
 | Indicator | Color | State |

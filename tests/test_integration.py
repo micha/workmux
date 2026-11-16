@@ -104,6 +104,44 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertEqual(self.tmux.pane(content.id).id, content.id)
 
     @unittest.skipUnless(shutil.which("git"), "Git is optional")
+    def test_nested_checkout_depth_option_updates_live_and_inherits(self):
+        root = Path(self.temporary.name)
+        workspace = root / 'workspace'
+        source = root / 'source'
+        environment = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1')
+
+        def git(directory, *args):
+            subprocess.run(['git', '-C', str(directory), *args], env=environment, check=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        for directory in (workspace, source):
+            directory.mkdir()
+            git(directory, 'init', '-b', 'main')
+            git(directory, 'config', 'user.name', 'Workmux Test')
+            git(directory, 'config', 'user.email', 'test@example.invalid')
+            git(directory, 'commit', '--allow-empty', '-m', 'initial')
+        linked = workspace / 'worktrees' / 'adzerk' / 'bifrost'
+        linked.parent.mkdir(parents=True)
+        git(source, 'worktree', 'add', '-b', 'feature', str(linked))
+        session = self.tmux.new_workspace('nested', str(workspace))
+        self.tmux.run('set-option', '-g', '@workmux-checkout-max-depth', '2')
+        content = self.tmux.pane(session + ':')
+        sidebar = next(pane for pane in self.tmux.panes(content.window) if pane.sidebar)
+        self.attach(session)
+        capture = lambda: self.tmux.run('capture-pane', '-p', '-t', sidebar.id)
+        self.assertEqual(self.tmux.workspaces()[0].checkout_max_depth, 2)
+        self.tmux.run('set-option', '-g', '@workmux-checkout-max-depth', '3')
+        eventually(lambda: '⎇ worktrees/adzerk/bifrost' in capture(), timeout=10)
+        self.tmux.run('set-option', '-t', session, '@workmux-checkout-max-depth', '0')
+        eventually(lambda: '⎇ worktrees/adzerk/bifrost' not in capture())
+        self.assertEqual(self.tmux.workspaces()[0].checkout_max_depth, 0)
+        self.tmux.run('set-option', '-u', '-t', session, '@workmux-checkout-max-depth')
+        eventually(lambda: '⎇ worktrees/adzerk/bifrost' in capture(), timeout=10)
+        self.assertEqual(self.tmux.workspaces()[0].checkout_max_depth, 3)
+        self.assertEqual({pane.id for pane in self.tmux.panes(content.window)},
+                         {content.id, sidebar.id})
+
+    @unittest.skipUnless(shutil.which("git"), "Git is optional")
     def test_container_worktrees_lazy_tabs_root_grouping_and_safe_removal(self):
         root = Path(self.temporary.name)
         source = root / 'source'

@@ -250,10 +250,10 @@ class SidebarTreeTests(unittest.TestCase):
                 self.calls.append(args)
 
         screen = Screen()
-        row = SidebarRow("$1", "@1", "  └─ ⣷ 1:build", "working")
+        row = SidebarRow("$1", "@1", "└─ ⣷ 1:build", "working")
         draw_row(screen, 2, " ", row, 0, {"working": 256}, "⢿")
-        self.assertEqual(screen.calls[0], (2, 0, "    └─ ⢿ 1:build", 79, 0))
-        self.assertEqual(screen.calls[1], (2, 7, "⢿", 1, 256))
+        self.assertEqual(screen.calls[0], (2, 0, "  └─ ⢿ 1:build", 79, 0))
+        self.assertEqual(screen.calls[1], (2, 5, "⢿", 1, 256))
 
     def test_only_status_symbol_receives_its_color(self):
         class Screen:
@@ -267,10 +267,10 @@ class SidebarTreeTests(unittest.TestCase):
                 self.calls.append(args)
 
         screen = Screen()
-        row = SidebarRow("$1", "@1", "  └─ ● 1:logs", "alert")
+        row = SidebarRow("$1", "@1", "└─ ● 1:logs", "alert")
         draw_row(screen, 2, " ", row, curses.A_BOLD, {"other": 1024})
-        self.assertEqual(screen.calls[0], (2, 0, "    └─ ● 1:logs", 79, curses.A_BOLD))
-        self.assertEqual(screen.calls[1], (2, 7, "●", 1, curses.A_BOLD | 1024))
+        self.assertEqual(screen.calls[0], (2, 0, "  └─ ● 1:logs", 79, curses.A_BOLD))
+        self.assertEqual(screen.calls[1], (2, 5, "●", 1, curses.A_BOLD | 1024))
 
     def test_idle_tabs_are_hidden_and_children_are_in_window_order(self):
         workspaces = [Workspace("$1", "one", "first", "/tmp"), Workspace("$2", "two", "second", "/tmp")]
@@ -283,8 +283,8 @@ class SidebarTreeTests(unittest.TestCase):
         rows = sidebar_rows(workspaces, tabs)
         self.assertEqual([row.key for row in rows], [("$1", None), ("$1", "@1"), ("$1", "@2"),
                                                     ("$1", "@3"), ("$2", None), ("$2", "@4")])
-        self.assertEqual([row.text for row in rows], ["1:one", "  ├─ ⣷ 1:build", "  ├─ ⚠ 2:question",
-                                                     "  └─ ✓ 3:done", "2:two", "  └─ ● 1:logs"])
+        self.assertEqual([row.text for row in rows], ["1:one", "├─ ⣷ 1:build", "├─ ⚠ 2:question",
+                                                     "└─ ✓ 3:done", "2:two", "└─ ● 1:logs"])
 
     def test_workspace_positions_change_without_changing_row_identity(self):
         alpha = Workspace("$8", "alpha", "old label", "/tmp")

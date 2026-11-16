@@ -10,10 +10,17 @@ from workmux.core import Tmux, WorkmuxError, Workspace
 
 
 class WorkspaceSelectTests(unittest.TestCase):
-    snapshot = ('$2\tzebra\tZebra\t/tmp/z\t1\n'
-                '$9\talpha\tAlpha\t/tmp/a\t1\n'
-                '$1\t3\tNumeric\t/tmp/n\t1\n'
-                '$0\tunmanaged\tIgnored\t/tmp/u\t0')
+    snapshot = ('$2\tzebra\tZebra\t/tmp/z\t1\t\n'
+                '$9\talpha\tAlpha\t/tmp/a\t1\t\n'
+                '$1\t3\tNumeric\t/tmp/n\t1\t\n'
+                '$0\tunmanaged\tIgnored\t/tmp/u\t0\t')
+
+    def test_checkout_depth_parsed_from_workspace_snapshot(self):
+        for value, expected in (('', None), ('broken', None), ('-1', None), ('0', 0), ('3', 3)):
+            with self.subTest(value=value), patch.object(
+                Tmux, 'run', return_value=f'$1\tone\tOne\t/tmp\t1\t{value}'
+            ):
+                self.assertEqual(Tmux().workspaces()[0].checkout_max_depth, expected)
 
     def test_indexes_use_sidebar_workspace_order_not_session_ids(self):
         tmux = Tmux()

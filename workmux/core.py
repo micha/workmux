@@ -27,6 +27,7 @@ class Workspace:
     name: str
     label: str
     directory: str
+    checkout_max_depth: int | None = None
 
 
 AGENT_STATES = ("idle", "working", "attention", "finished")
@@ -252,14 +253,21 @@ class Tmux:
     def workspaces(self) -> list[Workspace]:
         output = self.run(
             "list-sessions", "-F",
-            "#{session_id}\t#{session_name}\t#{@workspace-label}\t#{@workspace-dir}\t#{@workmux}",
+            "#{session_id}\t#{session_name}\t#{@workspace-label}\t#{@workspace-dir}\t#{@workmux}"
+            "\t#{@workmux-checkout-max-depth}",
             missing_ok=True,
         )
         result = []
         for line in output.splitlines():
             fields = line.split("\t")
-            if len(fields) == 5 and fields[4] == "1":
-                result.append(Workspace(*fields[:4]))
+            if len(fields) == 6 and fields[4] == "1":
+                try:
+                    depth = int(fields[5])
+                except ValueError:
+                    depth = None
+                if depth is not None and depth < 0:
+                    depth = None
+                result.append(Workspace(*fields[:4], checkout_max_depth=depth))
         return sorted(result, key=lambda workspace: workspace.name)
 
     def report_agent_state(self, target: str, state: str, pid: int | None = None,

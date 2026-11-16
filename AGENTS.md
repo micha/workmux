@@ -33,7 +33,9 @@
   changed window options without changing status formats or refresh intervals.
 - `workmux/checkouts.py`: bounded, read-only background discovery of Git checkouts
   and linked worktrees beneath saved workspace directories, including plain
-  containers. Do not follow discovered directory symlinks or scan checkout content.
+  containers and nested checkouts. Walk directory names within the configured
+  depth and existing scan budgets; never follow discovered directory symlinks,
+  descend into `.git`, or read checkout file contents.
 - `workmux/git_status.py`: optional, local-only Git probes and nonblocking sidebar
   cache. Use saved workspace directories, preserve filenames as opaque porcelain
   records, and never fetch or take optional index locks.
