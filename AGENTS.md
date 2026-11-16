@@ -139,6 +139,9 @@ python3 -m pip install -e .
   remain available, but use the machine's `<nixpkgs>` rather than the lock file.
 - `nix/workmux.nix` defines the optional application build, includes bundled agent
   resources, and smoke-tests install/uninstall in a temporary agent directory.
+  Pin private executables without changing the caller's PATH; keep Python module
+  bootstrapping process-local. `nix/check-environment.py` checks the installed
+  launcher, sidebars, and content-shell environments using a private tmux socket.
   `nix/python-deps.nix` defines the grammar dependency. `nix/checks.nix` runs the
   suite against the installed Nix package outside the checkout, without network
   downloads. Keep the separate pipx check: it validates the non-Nix installation.

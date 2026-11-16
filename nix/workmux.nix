@@ -26,13 +26,28 @@ pkgs.python3Packages.buildPythonApplication {
   };
   build-system = [ pkgs.python3Packages.setuptools ];
   dependencies = import ./python-deps.nix { inherit pkgs; };
-  makeWrapperArgs = [ "--prefix" "PATH" ":" (pkgs.lib.makeBinPath [ pkgs.tmux ]) ];
+  # Pin private dependencies without leaking immutable bin directories into
+  # tmux's session environment and the interactive shells it creates.
+  postPatch = ''
+    substituteInPlace workmux/core.py \
+      --replace-fail 'TMUX_EXECUTABLE = "tmux"' 'TMUX_EXECUTABLE = "${pkgs.tmux}/bin/tmux"'
+  '';
+  dontWrapPythonPrograms = true;
+  postFixup = ''
+    # Reuse Nixpkgs' Python module-path injection, but not its PATH wrapper.
+    buildPythonPath "$out ''${pythonPath[*]}"
+    patchPythonScript "$out/bin/workmux"
+    wrapProgram "$out/bin/workmux" --set PYTHONNOUSERSITE true
+  '';
   pythonImportsCheck = [
     "workmux" "workmux.cli" "workmux.sidebar" "workmux.bindings"
     "workmux.integration" "workmux.plugins" "workmux.checkouts"
   ];
   doInstallCheck = true;
   postInstallCheck = ''
+    ${pkgs.python3}/bin/python3 ${./check-environment.py} \
+      "$out/bin/workmux" "${pkgs.tmux}/bin/tmux" "${pkgs.runtimeShell}" \
+      "${pkgs.coreutils}/bin/sleep" "${pkgs.coreutils}/bin/env"
     # Test actual packaged resources from outside the source tree, without user config.
     (
       agent_dir="$(mktemp -d)"

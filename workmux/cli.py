@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from .core import AGENT_STATES, Tmux, WorkmuxError
+from .core import AGENT_STATES, TMUX_EXECUTABLE, Tmux, WorkmuxError
 from .layouts import LAYOUTS
 from .plugins import HARNESSES
 
@@ -40,7 +40,9 @@ def parser() -> argparse.ArgumentParser:
     listing = actions.add_parser("list", help="List managed workspaces in sidebar order")
     listing.add_argument("--json", action="store_true")
     select = actions.add_parser("select", help="Select a workspace for an attached client")
-    select.add_argument("target", help="Workspace ID, session name, or display label")
+    selection = select.add_mutually_exclusive_group(required=True)
+    selection.add_argument("target", nargs="?", help="Workspace ID, session name, or display label")
+    selection.add_argument("--index", type=int, help="1-based workspace index shown in the sidebar")
     select.add_argument("--client")
     add_pane(select)
 
@@ -94,10 +96,14 @@ def require_pane(args) -> str:
     return args.pane
 
 
-def resolve_workspace(tmux: Tmux, target: str | None) -> str:
+def resolve_workspace(tmux: Tmux, target: str | None, *, index: int | None = None) -> str:
     workspaces = tmux.workspaces()
     if not workspaces:
         raise WorkmuxError("No workspaces. Create one with: workmux workspace new NAME --dir DIRECTORY")
+    if index is not None:
+        if not 1 <= index <= len(workspaces):
+            raise WorkmuxError(f"Workspace index out of range: {index} (expected 1-{len(workspaces)})")
+        return workspaces[index - 1].id
     if target is None:
         return workspaces[0].id
     matches = [workspace.id for workspace in workspaces if target in (
@@ -111,7 +117,7 @@ def resolve_workspace(tmux: Tmux, target: str | None) -> str:
 def attach(tmux: Tmux, session: str) -> int:
     if os.environ.get("TMUX"):
         raise WorkmuxError("Already inside tmux. Use workspace select, or attach from a terminal outside tmux.")
-    return subprocess.call(["tmux", *tmux.selector, "attach-session", "-t", session])
+    return subprocess.call([TMUX_EXECUTABLE, *tmux.selector, "attach-session", "-t", session])
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -169,7 +175,8 @@ def main(argv: list[str] | None = None) -> int:
                     for workspace in workspaces:
                         print(f"{workspace.id}\t{workspace.label}\t{workspace.directory}")
             else:
-                tmux.select_workspace(resolve_workspace(tmux, args.target), require_pane(args), args.client)
+                tmux.select_workspace(resolve_workspace(tmux, args.target, index=args.index),
+                                      require_pane(args), args.client)
         elif args.command == "attach":
             return attach(tmux, resolve_workspace(tmux, args.target))
         elif args.command == "tab":

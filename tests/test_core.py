@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from workmux.cli import main, resolve_workspace
+from workmux.cli import attach, main, resolve_workspace
 from workmux.core import (Tmux, WorkmuxError, Workspace, sidebar_width, tmux_argument,
                           validate_directory, validate_label)
 from workmux.sidebar import visible_offset
@@ -58,6 +58,23 @@ class InputTests(unittest.TestCase):
                     result = visible_offset(index, offset, rows)
                     self.assertLessEqual(result, index)
                     self.assertLess(index, result + rows)
+
+    def test_private_tmux_executable_does_not_require_path_changes(self):
+        executable = "/private package/bin/tmux"
+        environment = {"PATH": "/user/profile/bin"}
+        with patch.dict(os.environ, environment, clear=True), \
+                patch("workmux.core.TMUX_EXECUTABLE", executable), \
+                patch("workmux.core.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess([], 0, stdout="ok\n", stderr="")
+            self.assertEqual(Tmux(socket="/tmp/private").run("list-sessions"), "ok")
+            self.assertEqual(run.call_args.args[0][:3], [executable, "-S", "/tmp/private"])
+            self.assertEqual(dict(os.environ), environment)
+        with patch.dict(os.environ, environment, clear=True), \
+                patch("workmux.cli.TMUX_EXECUTABLE", executable), \
+                patch("workmux.cli.subprocess.call", return_value=0) as call:
+            self.assertEqual(attach(Tmux(socket="/tmp/private"), "$9"), 0)
+            call.assert_called_once_with([executable, "-S", "/tmp/private", "attach-session", "-t", "$9"])
+            self.assertEqual(dict(os.environ), environment)
 
     def test_helper_preserves_shell_arguments(self):
         tmux = Tmux(socket="/tmp/socket ' with spaces")

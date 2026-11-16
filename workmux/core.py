@@ -117,6 +117,10 @@ def sidebar_width(window_width: int, preferred: int = 36) -> int:
     return min(max(4, preferred), max(4, window_width - 20))
 
 
+# Optional package builds may pin this executable without changing the user's PATH.
+TMUX_EXECUTABLE = "tmux"
+
+
 class Tmux:
     def __init__(self, *, server: str = "workmux", socket: str | None = None):
         self.server = server
@@ -129,7 +133,7 @@ class Tmux:
     def run(self, *args: str, input: str | None = None, missing_ok: bool = False) -> str:
         try:
             result = subprocess.run(
-                ["tmux", *self.selector, "-f", os.devnull, *args], input=input, text=True,
+                [TMUX_EXECUTABLE, *self.selector, "-f", os.devnull, *args], input=input, text=True,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
             )
         except FileNotFoundError as error:

@@ -52,7 +52,10 @@ nix profile upgrade workmux
 On older Nix versions, use `nix profile install .` instead of `nix profile add .`.
 The flake supplies Python, its dependencies, and tmux, pinned by `flake.lock`.
 Ensure your Nix profile's `bin` directory is on tmux's `PATH`. Nix outputs are
-provided for `x86_64-linux` and `aarch64-linux`.
+provided for `x86_64-linux` and `aarch64-linux`. Private package dependencies do
+not add directories to content shells' `PATH`. Shells or tmux sessions created by
+older versions may retain pinned store paths that shadow profile updates; those
+existing environments are not automatically repaired.
 
 To build without changing your profile, use `nix build`; the command is then
 available at `./result/bin/workmux`. Nix remains optional.
@@ -369,6 +372,7 @@ workmux workspace list
 workmux workspace list --json
 workmux workspace new project-b --dir /path/to/project-b
 workmux workspace select project-b
+workmux workspace select --index 3
 workmux tab new editor
 workmux split right
 workmux split down
@@ -383,7 +387,12 @@ Inside tmux, commands default to its server. Outside tmux, the default server is
 named `workmux`. Explicit `--server NAME` or `--socket PATH` overrides inference
 and must appear before the subcommand. Pane-oriented commands accept `--pane ID`.
 `workspace select` requires an attached client; the sidebar supports one attached
-client per session. Run `workmux --help` or a subcommand's help for argument syntax.
+client per session. Use `workspace select --index N` to select by the 1-based
+workspace prefix in the sidebar (not a tmux session ID or a checkout/tab row).
+Indexes follow the sidebar's lexical session-name order and can change when
+workspaces are added, removed, or renamed; prefer names or IDs in scripts.
+A positional numeric target still selects a workspace with that name.
+Run `workmux --help` or a subcommand's help for argument syntax.
 `dispatch` is an internal command for adapted keybindings, not a user workflow.
 
 ### Optional isolated-server workflow
