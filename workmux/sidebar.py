@@ -10,13 +10,11 @@ import unicodedata
 from .checkouts import CheckoutCache, contains
 from .core import Tab, Tmux, WorkmuxError, Workspace
 from .git_status import GitStatus, GitStatusCache
+from .status import ANIMATION_INTERVAL, BRAILLE_WHEEL, INDICATORS, WindowIndicators, working_indicator
 
 
-BRAILLE_WHEEL = ("⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "⣾")
-ANIMATION_INTERVAL = 0.125
 SNAPSHOT_INTERVAL = 0.4
 WHEEL_SCROLL_ROWS = 3
-INDICATORS = {"working": BRAILLE_WHEEL[0], "attention": "⚠", "finished": "✓", "alert": "●"}
 GIT_INDICATORS = {"clean": "✓", "dirty": "●", "ahead": "↑", "behind": "↓",
                   "diverged": "↕", "conflict": "!"}
 STATUS_FOREGROUNDS = {
@@ -164,11 +162,6 @@ def draw_text(screen, row: int, text: str, attribute: int = 0, *, x: int = 0,
         pass  # Wide window-name glyphs can hit the edge before the character limit.
 
 
-def working_indicator(now: float) -> str:
-    """Select a time-based animation frame, independent of input and polling."""
-    return BRAILLE_WHEEL[int(now / ANIMATION_INTERVAL) % len(BRAILLE_WHEEL)]
-
-
 def draw_row(screen, position: int, marker: str, row: SidebarRow, attribute: int,
              colors: dict[str, int], working_frame: str | None = None) -> None:
     """Draw a row, coloring its status symbols independently."""
@@ -201,6 +194,7 @@ def draw_row(screen, position: int, marker: str, row: SidebarRow, attribute: int
 def run_sidebar(tmux: Tmux, pane_id: str) -> None:
     git_status = GitStatusCache()
     checkout_cache = CheckoutCache()
+    indicators = WindowIndicators(pane_id)
 
     def loop(screen):
         screen.keypad(True)
@@ -231,7 +225,9 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                     checkouts = checkout_cache.snapshot(workspaces)
                     directories = tuple({directory for paths in checkouts.values() for directory in paths})
                     windows = tmux.checkout_tabs() if directories else {}
-                    rows = sidebar_rows(workspaces, tmux.attention_tabs(),
+                    activity = tmux.activity_snapshot()
+                    indicators.update(activity)
+                    rows = sidebar_rows(workspaces, activity.tabs,
                                         git_status.snapshot(workspaces, directories), checkouts, windows)
                 except WorkmuxError as error:
                     screen.erase()
@@ -243,6 +239,7 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                 next_snapshot = now + SNAPSHOT_INTERVAL
             if pane is None:
                 continue
+            indicators.publish(tmux, now)
 
             keys = [row.key for row in rows]
             if selected_key not in keys or not pane.active:

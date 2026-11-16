@@ -74,6 +74,57 @@ def _agent_state(value: str, alive: dict[int, bool]) -> str | None:
     return state
 
 
+_ACTIVITY_FORMAT = (
+    "#{session_id}\t#{window_id}\t#{window_index}\t#{window_flags}\t#{pane_id}"
+    "\t#{@workspace-sidebar}\t#{pane_dead}\t#{@workmux-agent}\t#{window_name}"
+)
+
+
+@dataclass(frozen=True)
+class ActivitySnapshot:
+    tabs: list[Tab]
+    publisher: str | None
+    indicators: dict[tuple[str, str], str]
+
+
+def _attention_tabs(output: str) -> list[Tab]:
+    tabs = {}
+    roots = {}
+    alive = {}
+    for line in output.splitlines():
+        fields = line.split("\t", 8)
+        if len(fields) != 9:
+            continue
+        session, window, index, flags, pane, sidebar, dead, report, name = fields
+        try:
+            index = int(index)
+        except ValueError:
+            continue
+        key = (session, window)
+        native = "alert" if any(flag in flags for flag in "!#~") else "idle"
+        current = tabs.get(key, Tab(session, window, index, name, native))
+        state = _agent_state(report, alive) if sidebar != "1" and dead != "1" else None
+        if state:
+            data = json.loads(report)
+            reported = data.get("roots", [data.get("root")])
+            if not isinstance(reported, list) or not reported:
+                reported = [None]
+            for root in reported:
+                root = root if isinstance(root, str) and os.path.isabs(root) else None
+                if root not in roots.setdefault(key, []):
+                    roots[key].append(root)
+        # Passive states classify pending alerts; working remains visible alone.
+        if state in ("attention", "finished") and native != "alert":
+            state = None
+        if state and _AGENT_PRIORITY[state] > _AGENT_PRIORITY.get(current.state, 0):
+            current = Tab(session, window, index, name, state, pane)
+        tabs[key] = current
+    return sorted((replace(tab, roots=tuple(roots.get(key, ()))
+                           if any(root is not None for root in roots.get(key, ())) else ())
+                   for key, tab in tabs.items() if tab.state != "idle"),
+                  key=lambda tab: (tab.session, tab.index))
+
+
 @dataclass(frozen=True)
 class Pane:
     id: str
@@ -225,49 +276,32 @@ class Tmux:
 
     def attention_tabs(self) -> list[Tab]:
         """Aggregate agent reports and native alerts in one server-wide snapshot."""
-        output = self.run(
-            "list-panes", "-a", "-F",
-            "#{session_id}\t#{window_id}\t#{window_index}\t#{window_flags}\t#{pane_id}"
-            "\t#{@workspace-sidebar}\t#{pane_dead}\t#{@workmux-agent}\t#{window_name}",
-            missing_ok=True,
-        )
-        tabs = {}
-        roots = {}
-        alive = {}
+        return _attention_tabs(self.run("list-panes", "-a", "-F", _ACTIVITY_FORMAT, missing_ok=True))
+
+    def activity_snapshot(self) -> ActivitySnapshot:
+        """Read sidebar activity, publisher election, and window caches together."""
+        output = self.run("list-panes", "-a", "-F",
+                          "#{@workmux}\t#{@workmux-agent-indicator}\t" + _ACTIVITY_FORMAT,
+                          missing_ok=True)
+        rows = []
+        publishers = set()
+        indicators = {}
         for line in output.splitlines():
-            fields = line.split("\t", 8)
-            if len(fields) != 9:
+            fields = line.split("\t", 2)
+            if len(fields) != 3:
                 continue
-            session, window, index, flags, pane, sidebar, dead, report, name = fields
-            try:
-                index = int(index)
-            except ValueError:
+            managed, indicator, row = fields
+            panes = row.split("\t", 8)
+            if len(panes) != 9:
                 continue
-            key = (session, window)
-            native = "alert" if any(flag in flags for flag in "!#~") else "idle"
-            current = tabs.get(key, Tab(session, window, index, name, native))
-            state = _agent_state(report, alive) if sidebar != "1" and dead != "1" else None
-            if state:
-                data = json.loads(report)
-                reported = data.get("roots", [data.get("root")])
-                if not isinstance(reported, list) or not reported:
-                    reported = [None]
-                for root in reported:
-                    root = root if isinstance(root, str) and os.path.isabs(root) else None
-                    if root not in roots.setdefault(key, []):
-                        roots[key].append(root)
-            # Passive agent states classify pending alerts, not permanent tree rows.
-            # Keep working visible independently, but hide attention/finished after
-            # tmux acknowledges the window's bell/activity/silence alert.
-            if state in ("attention", "finished") and native != "alert":
-                state = None
-            if state and _AGENT_PRIORITY[state] > _AGENT_PRIORITY.get(current.state, 0):
-                current = Tab(session, window, index, name, state, pane)
-            tabs[key] = current
-        return sorted((replace(tab, roots=tuple(roots.get(key, ()))
-                               if any(root is not None for root in roots.get(key, ())) else ())
-                       for key, tab in tabs.items() if tab.state != "idle"),
-                      key=lambda tab: (tab.session, tab.index))
+            rows.append(row)
+            if managed == "1":
+                session, window, _, _, pane, sidebar, dead, _, _ = panes
+                indicators.setdefault((session, window), indicator)
+                if sidebar == "1" and dead != "1":
+                    publishers.add(pane)
+        publisher = min(publishers, key=lambda pane: int(pane[1:]), default=None)
+        return ActivitySnapshot(_attention_tabs("\n".join(rows)), publisher, indicators)
 
     @staticmethod
     def _pane_format() -> str:

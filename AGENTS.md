@@ -28,6 +28,9 @@
   for the optional isolated-server workflow.
 - `workmux/layouts.py`: pure geometry and portable tmux layout serialization.
 - `workmux/sidebar.py`: terminal rendering and workspace navigation.
+- `workmux/status.py`: shared activity symbols and plain animated window-status
+  publication. Elect one live owned sidebar from the activity snapshot; batch
+  changed window options without changing status formats or refresh intervals.
 - `workmux/checkouts.py`: bounded, read-only background discovery of Git checkouts
   and linked worktrees beneath saved workspace directories, including plain
   containers. Do not follow discovered directory symlinks or scan checkout content.

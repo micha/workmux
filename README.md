@@ -323,6 +323,34 @@ Install an [agent integration](#optional-agent-integrations) for automatic repor
 Native tmux alerts need no agent integration; their monitoring settings remain
 your responsibility.
 
+### Window status indicators
+
+Running sidebars also publish each managed window's activity symbol in the
+window-local `@workmux-agent-indicator` option. It uses the same states, priority,
+and native alert-clearing rules as the sidebar: an animated Braille wheel for
+working, `⚠` for attention, `✓` for finished, and `●` for other native alerts.
+Idle windows have an empty indicator. The value is plain text, without colors
+or Git status suffixes; window names are unchanged.
+
+To opt in, add the indicator before the index and name in both window formats:
+
+```tmux
+set -g window-status-format ' #{?#{&&:#{==:#{@workmux},1},#{@workmux-agent-indicator}},#{@workmux-agent-indicator} ,}#I:#W#F '
+set -g window-status-current-format ' #{?#{&&:#{==:#{@workmux},1},#{@workmux-agent-indicator}},#{@workmux-agent-indicator} ,}#I:#W#F '
+```
+
+The guard leaves non-workmux sessions with the usual index, name, and native
+flags. Adapt the surrounding format to your existing styling; `enable` never
+installs or changes these formats for you. Animation uses the sidebar's eight
+frames per second without changing `status-interval`, including when it is zero.
+One live sidebar publishes batched updates for the server; static indicators
+write only when they change. Another sidebar takes over if the publisher exits.
+State changes follow the sidebar's normal snapshot refresh.
+
+After updating workmux, run `workmux sidebar reload` to restart existing sidebars
+with the new installation. Indicators require at least one running sidebar on
+the server.
+
 ### Closing tabs and workspaces
 
 When the last content pane in a tab closes, workmux removes that tab's sidebar

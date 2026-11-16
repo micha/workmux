@@ -24,6 +24,7 @@ from workmux.core import Tmux, WorkmuxError, quote_tmux
 from workmux.integration import FOCUS_HOOK_OPTION
 from workmux.layouts import LAYOUTS
 from workmux.sidebar import BRAILLE_WHEEL
+from workmux.status import WindowIndicators
 
 
 def eventually(predicate, message="condition was not reached", timeout=8):
@@ -255,7 +256,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertEqual(self.tmux.run('display-message', '-p', '-t', content.id, '#{pane_pid}'), old_content_pid)
         self.assertNotEqual(self.tmux.run('display-message', '-p', '-t', sidebar.id, '#{pane_pid}'), old_sidebar_pid)
 
-    def attach(self, session):
+    def attach(self, session, output=None):
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
         environment = dict(os.environ, TERM="xterm-256color")
@@ -273,8 +274,12 @@ class TmuxIntegrationTests(unittest.TestCase):
             while not self.stop_readers.is_set():
                 try:
                     readable, _, _ = select.select([master], [], [], 0.1)
-                    if readable and not os.read(master, 65536):
-                        break
+                    if readable:
+                        data = os.read(master, 65536)
+                        if not data:
+                            break
+                        if output is not None:
+                            output.extend(data)
                 except OSError:
                     break
 
@@ -1381,6 +1386,153 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertFalse(any(tab.id == window for tab in self.tmux.attention_tabs()))
         with self.assertRaisesRegex(WorkmuxError, "sidebar"):
             self.tmux.report_agent_state(sidebar.id, "working")
+
+    def test_window_status_prefix_animates_with_existing_formats_and_zero_interval(self):
+        session, pane = self.native_session()
+        status_format = (' #{?#{&&:#{==:#{@workmux},1},#{@workmux-agent-indicator}},'
+                         '#{@workmux-agent-indicator} ,}#I:#W#F ')
+        for option, value in (("window-status-format", status_format),
+                              ("window-status-current-format", status_format),
+                              ("window-status-current-style", "bold"), ("status-interval", "0")):
+            self.tmux.run("set-option", "-g", option, value)
+        self.tmux.enable(pane)
+        original = self.tmux.pane(pane)
+        current = self.tmux.new_tab(pane, "current")
+        _, unmanaged = self.native_session("plain")
+        self.tmux.report_agent_state(unmanaged, "working", os.getpid())
+        self.tmux.run("set-option", "-w", "-t", self.tmux.pane(unmanaged).window,
+                      "@workmux-agent-indicator", "leave-me")
+        output = bytearray()
+        self.attach(session, output=output)
+        # Hide the sidebar's own animation: glyphs arriving on the terminal now
+        # come from the status line, not curses. No interval redraws are enabled.
+        self.tmux.run("resize-pane", "-Z", "-t", current)
+        self.tmux.report_agent_state(pane, "working", os.getpid())
+        self.tmux.report_agent_state(current, "working", os.getpid())
+        eventually(lambda: len({glyph for glyph in BRAILLE_WHEEL if glyph.encode() in output}) >= 3,
+                   "status line did not animate with status-interval zero")
+        for target in (pane, current):
+            for option in ("window-status-format", "window-status-current-format"):
+                rendered = self.tmux.run("display-message", "-p", "-t", target, "#{E:" + option + "}")
+                self.assertTrue(any(rendered.startswith(" " + glyph + " ") for glyph in BRAILLE_WHEEL),
+                                repr(rendered))
+        self.tmux.run("rename-window", "-t", original.window, "renamed ; $literal")
+        self.tmux.run("move-window", "-s", original.window, "-t", session + ":9")
+        eventually(lambda: self.tmux.run("display-message", "-p", "-t", pane,
+                                        "#{E:window-status-format}").lstrip()[2:].startswith("9:renamed ; $literal"))
+        self.tmux.report_agent_state(pane, "idle")
+        self.tmux.report_agent_state(current, "idle")
+        eventually(lambda: all(self.tmux.run("display-message", "-p", "-t", target,
+                                             "#{@workmux-agent-indicator}") == "" for target in (pane, current)))
+        self.assertEqual(self.tmux.run("display-message", "-p", "-t", unmanaged,
+                                       "#{@workmux-agent-indicator}"), "leave-me")
+        for option, value in (("window-status-format", status_format),
+                              ("window-status-current-format", status_format),
+                              ("window-status-current-style", "bold"), ("status-interval", "0")):
+            self.assertEqual(self.tmux.run("show-options", "-gv", option), value)
+        self.assertTrue(self.tmux.pane(current).zoomed)
+        self.assertEqual(self.tmux.pane(pane).id, pane)
+
+    def test_window_status_matches_priority_native_alerts_and_clearing(self):
+        session, content, _ = self.workspace()
+        working = self.tmux.split(content.id, "right")
+        attention = self.tmux.split(working, "down")
+        observer = self.tmux.new_tab(content.id, "observer")
+        self.attach(session)
+        indicator = lambda: self.tmux.run("display-message", "-p", "-t", content.id,
+                                          "#{@workmux-agent-indicator}")
+        self.tmux.run("send-keys", "-t", content.id, "printf '\\a'", "Enter")
+        eventually(lambda: indicator() == "●")
+        self.tmux.report_agent_state(content.id, "finished", os.getpid())
+        eventually(lambda: indicator() == "✓")
+        self.tmux.report_agent_state(working, "working", os.getpid())
+        eventually(lambda: indicator() in BRAILLE_WHEEL)
+        self.tmux.report_agent_state(attention, "attention", os.getpid())
+        eventually(lambda: indicator() == "⚠")
+        self.tmux.run("select-window", "-t", content.window)
+        eventually(lambda: indicator() in BRAILLE_WHEEL)
+        self.assertEqual(self.tmux.run("display-message", "-p", "-t", content.id,
+                                       "#{window_bell_flag}"), "0")
+        self.tmux.report_agent_state(working, "idle")
+        eventually(lambda: indicator() == "")
+        report = json.loads(self.tmux.run("show-options", "-pqv", "-t", attention, "@workmux-agent"))
+        self.assertEqual(report["state"], "attention")
+        # Reports from exited processes and dead content panes cannot keep a
+        # working prefix visible or mask an otherwise unclassified native alert.
+        process = subprocess.Popen(["sleep", "30"])
+        try:
+            self.tmux.report_agent_state(working, "working", process.pid)
+            eventually(lambda: indicator() in BRAILLE_WHEEL)
+        finally:
+            process.terminate()
+            process.wait(timeout=3)
+        eventually(lambda: indicator() == "")
+        self.tmux.report_agent_state(working, "working", os.getpid())
+        eventually(lambda: indicator() in BRAILLE_WHEEL)
+        self.tmux.run("set-option", "-w", "-t", content.window, "remain-on-exit", "on")
+        self.tmux.run("respawn-pane", "-k", "-t", working, "exit 0")
+        eventually(lambda: self.tmux.run("display-message", "-p", "-t", working, "#{pane_dead}") == "1")
+        eventually(lambda: indicator() == "")
+        self.tmux.report_agent_state(content.id, "idle")
+        self.tmux.report_agent_state(attention, "idle")
+        self.tmux.run("select-window", "-t", self.tmux.pane(observer).window)
+        self.tmux.run("send-keys", "-t", content.id, "printf '\\a'", "Enter")
+        eventually(lambda: indicator() == "●")
+
+    def test_window_status_publisher_fails_over_and_reload_resynchronizes(self):
+        first, content, leader = self.workspace("first")
+        second, other, follower = self.workspace("second")
+        self.attach(second)
+        self.tmux.report_agent_state(other.id, "working", os.getpid())
+        indicator = lambda: self.tmux.run("display-message", "-p", "-t", other.id,
+                                          "#{@workmux-agent-indicator}")
+        eventually(lambda: indicator() in BRAILLE_WHEEL)
+        self.assertEqual(self.tmux.activity_snapshot().publisher, leader.id)
+        self.tmux.run("set-option", "-w", "-t", content.window, "remain-on-exit", "on")
+        self.tmux.run("respawn-pane", "-k", "-t", leader.id, "exit 0")
+        eventually(lambda: self.tmux.run("display-message", "-p", "-t", leader.id, "#{pane_dead}") == "1")
+        eventually(lambda: self.tmux.activity_snapshot().publisher == follower.id)
+        frames = set()
+
+        def animating():
+            value = indicator()
+            if value in BRAILLE_WHEEL:
+                frames.add(value)
+            return len(frames) >= 3
+
+        eventually(animating, "new publisher did not continue animation")
+        self.assertEqual(self.tmux.reload_sidebars(), 2)
+        eventually(lambda: self.tmux.activity_snapshot().publisher == leader.id)
+        self.tmux.report_agent_state(other.id, "idle")
+        eventually(lambda: indicator() == "")
+        self.assertEqual(self.tmux.pane(other.id).id, other.id)
+
+    def test_window_status_rechecks_ownership_and_tolerates_closed_targets(self):
+        first, content, leader = self.workspace("first")
+        second, other, follower = self.workspace("second")
+        # Stop automatic publication while retaining live owned pane metadata,
+        # so this test can change ownership between a snapshot and its write.
+        for sidebar in (leader, follower):
+            self.tmux.run("respawn-pane", "-k", "-t", sidebar.id, "sleep 600")
+        self.tmux.report_agent_state(other.id, "working", os.getpid())
+        self.tmux.run("set-option", "-w", "-t", other.window, "@workmux-agent-indicator", "untouched")
+        indicators = WindowIndicators(leader.id)
+        indicators.update(self.tmux.activity_snapshot())
+        self.tmux.run("set-option", "-t", second, "@workmux", "0")
+        indicators.publish(self.tmux, 0)
+        self.assertEqual(self.tmux.run("show-options", "-wqv", "-t", other.window,
+                                       "@workmux-agent-indicator"), "untouched")
+        self.tmux.run("set-option", "-t", second, "@workmux", "1")
+        indicators.update(self.tmux.activity_snapshot())
+        self.tmux.run("set-option", "-p", "-t", leader.id, "@workspace-sidebar", "0")
+        indicators.publish(self.tmux, 0)
+        self.assertEqual(self.tmux.run("show-options", "-wqv", "-t", other.window,
+                                       "@workmux-agent-indicator"), "untouched")
+        self.tmux.run("set-option", "-p", "-t", leader.id, "@workspace-sidebar", "1")
+        indicators.update(self.tmux.activity_snapshot())
+        self.tmux.run("kill-window", "-t", other.window)
+        indicators.publish(self.tmux, 0)  # Missing target is best-effort decoration.
+        self.assertEqual(self.tmux.pane(content.id).session, first)
 
     def test_mouse_click_native_alert_row_focuses_tab_and_clears_alert(self):
         session, content, _ = self.workspace()

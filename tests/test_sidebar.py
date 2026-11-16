@@ -6,7 +6,7 @@ import itertools
 import unittest
 from unittest.mock import Mock, patch
 
-from workmux.core import Pane, Tab, Workspace
+from workmux.core import ActivitySnapshot, Pane, Tab, Workspace
 from workmux.sidebar import mouse_wheel_delta, run_sidebar, scroll_offset
 
 
@@ -51,7 +51,7 @@ class SidebarLoopTests(unittest.TestCase):
         tmux.run.return_value = "2"
         tmux.workspaces.return_value = [Workspace(f"${index}", f"repo-{index}", "", "/jobs")
                                         for index in range(20)]
-        tmux.attention_tabs.return_value = list(tabs)
+        tmux.activity_snapshot.return_value = ActivitySnapshot(list(tabs), None, {})
         tmux.checkout_tabs.return_value = windows or {}
         screen = Mock()
         screen.getmaxyx.return_value = (10, 36)  # Six tree rows.
