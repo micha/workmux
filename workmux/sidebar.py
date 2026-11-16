@@ -264,7 +264,9 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                     (row.window is None and row.directory is None) or row.window == pane.window)
                 marker = "›" if current else " "
                 attribute = curses.A_REVERSE if pane.active and row.key == selected_key else 0
-                if current or row.state in ("attention", "alert"):
+                if row.session != pane.session:
+                    attribute |= curses.A_DIM
+                elif current or row.state in ("attention", "alert"):
                     attribute |= curses.A_BOLD
                 draw_row(screen, position + 1, marker, row, attribute, colors, working_indicator(now))
             draw_text(screen, height - 2, message or "Enter: select  q: back", curses.A_DIM)

@@ -181,8 +181,9 @@ Alt+7 retile content, prefix+Space cycles layouts, and prefix+E balances adjacen
 content panes after enabling.
 
 In the sidebar, click a workspace if tmux mouse support is enabled. The `›`
-marker identifies the current workspace. Workspace selection restores the
-destination session's selected tab.
+marker identifies the current workspace; other workspaces and their child rows
+use dimmed text and status colors. Workspace selection restores the destination
+session's selected tab.
 
 With tmux's `focus-events` option on, workmux's runtime `pane-focus-in` hook returns
 focus to the previously active content pane whenever the sidebar gains focus.

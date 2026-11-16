@@ -93,6 +93,19 @@ class SidebarLoopTests(unittest.TestCase):
             self.assertTrue(mousemask.call_args.args[0] & 128)
         return frames, tmux
 
+    def test_other_workspaces_and_children_are_dim_even_when_selected(self):
+        tabs = [Tab('$0', '@0', 0, 'local', 'working'),
+                Tab('$1', '@1', 1, 'remote', 'attention')]
+        frames, _ = self.run_loop([curses.KEY_DOWN], tabs=tabs,
+                                  checkouts={'$1': ('/jobs/repo',)})
+        for key, attribute in frames[-1]:
+            self.assertEqual(bool(attribute & curses.A_DIM), key[0] != '$0')
+            if key[0] != '$0':
+                self.assertFalse(attribute & curses.A_BOLD)
+        selected = dict(frames[-1])[('$1', None)]
+        self.assertTrue(selected & curses.A_REVERSE)
+        self.assertTrue(selected & curses.A_DIM)
+
     def test_wheel_survives_refreshes_without_focus_or_activation(self):
         for active in (True, False):
             with self.subTest(active=active):
