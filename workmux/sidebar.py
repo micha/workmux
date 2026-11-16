@@ -13,6 +13,7 @@ from .git_status import GitStatus, GitStatusCache
 from .status import ANIMATION_INTERVAL, BRAILLE_WHEEL, INDICATORS, WindowIndicators, working_indicator
 
 
+AGENT_ROW_STATES = ("working", "attention", "finished")
 SNAPSHOT_INTERVAL = 0.4
 WHEEL_SCROLL_ROWS = 3
 GIT_INDICATORS = {"clean": "✓", "dirty": "●", "ahead": "↑", "behind": "↓",
@@ -55,7 +56,8 @@ def _tab_label(tab: Tab) -> str:
     number = str(tab.index)
     if tab.pane is not None and tab.pane_index is not None:
         number += f".{tab.pane_index}"
-    return f"{number}:{_label(tab.title or tab.name)}"
+    icon = "✦" if tab.state in AGENT_ROW_STATES else INDICATORS[tab.state]
+    return f"{icon} {number}:{_label(tab.title or tab.name)}"
 
 
 def _git_suffix(states: GitStatus) -> str:
@@ -110,12 +112,12 @@ def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
             for child_index, tab in enumerate(entries):
                 connector = "└─" if child_index == len(entries) - 1 else "├─"
                 prefix = "   " if last else "│  "
-                text = f"{prefix}{connector} {INDICATORS[tab.state]} {_tab_label(tab)}"
+                text = f"{prefix}{connector} {_tab_label(tab)}"
                 rows.append(SidebarRow(workspace.id, tab.id, text, tab.state, pane=tab.pane))
         entries = ungrouped
         for index, tab in enumerate(entries):
             branch = "└─" if index == len(entries) - 1 else "├─"
-            text = f"{branch} {INDICATORS[tab.state]} {_tab_label(tab)}"
+            text = f"{branch} {_tab_label(tab)}"
             rows.append(SidebarRow(workspace.id, tab.id, text, tab.state, pane=tab.pane))
     return rows
 
@@ -177,17 +179,23 @@ def draw_text(screen, row: int, text: str, attribute: int = 0, *, x: int = 0,
 def draw_row(screen, position: int, marker: str, row: SidebarRow, attribute: int,
              colors: dict[str, int], working_frame: str | None = None) -> None:
     """Draw a row, coloring its status symbols independently."""
-    text = f"{marker} {row.text}"
     indicator = INDICATORS.get(row.state or "")
-    symbol_x = text.find(indicator) if indicator else -1
-    if row.state == "working" and symbol_x >= 0:
-        indicator = working_frame or BRAILLE_WHEEL[0]
-        text = text[:symbol_x] + indicator + text[symbol_x + 1:]
+    if row.state in AGENT_ROW_STATES:
+        if row.state == "working":
+            indicator = working_frame or BRAILLE_WHEEL[0]
+        marker = indicator
+        symbol_x = 0
+    else:
+        symbol_x = None
+    text = f"{marker} {row.text}"
+    if symbol_x is None:
+        symbol_x = text.find(indicator) if indicator else -1
     draw_text(screen, position, text, attribute)
     if indicator and symbol_x >= 0:
         color = colors.get(row.state or "", colors.get("other", 0))
-        if color:
-            draw_text(screen, position, indicator, attribute | color, x=symbol_x, max_width=2)
+        if color or row.state in AGENT_ROW_STATES:
+            symbol_attribute = attribute & ~curses.A_DIM if row.state in AGENT_ROW_STATES else attribute
+            draw_text(screen, position, indicator, symbol_attribute | color, x=symbol_x, max_width=2)
     if row.git_states:
         # Locate the suffix structurally: session names may contain symbols too.
         suffix = " ".join(GIT_INDICATORS[state] for state in row.git_states)
@@ -276,7 +284,7 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
             for position, row in enumerate(rows[offset:offset + visible_rows]):
                 current = row.session == pane.session and (
                     (row.window is None and row.directory is None) or row.window == pane.window)
-                marker = "›" if current else " "
+                marker = "›" if current and row.window is None and row.directory is None else " "
                 attribute = curses.A_REVERSE if pane.active and row.key == selected_key else 0
                 if row.session != pane.session:
                     attribute |= curses.A_DIM

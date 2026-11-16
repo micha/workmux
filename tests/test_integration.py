@@ -39,7 +39,8 @@ def eventually(predicate, message="condition was not reached", timeout=8):
 
 def pane_contains_any(tmux, pane, indicators):
     output = tmux.run("capture-pane", "-p", "-t", pane)
-    return any(f"─ {indicator} " in output for indicator in indicators)
+    return any(line.startswith(indicator + ' ') and '✦' in line
+               for line in output.splitlines() for indicator in indicators)
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux is required for integration tests")
@@ -147,7 +148,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.run('select-pane', '-t', agent, '-T', 'worktree-agent')
         self.tmux.report_agent_state(content.id, 'working', os.getpid(), str(workspace))
         self.tmux.report_agent_state(agent, 'working', os.getpid(), str(linked))
-        eventually(lambda: any('│  └─ ' + frame in capture() for frame in BRAILLE_WHEEL)
+        eventually(lambda: any(frame + ' │  └─ ✦' in capture() for frame in BRAILLE_WHEEL)
                    and 'worktree-agent' in capture() and 'workspace-agent' in capture())
         rows = sidebar_rows(self.tmux.workspaces(), self.tmux.attention_tabs(),
                             checkouts={session: (str(linked),)})
@@ -198,8 +199,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertEqual(len(self.tmux.run('list-windows', '-t', session).splitlines()), 2)
         self.tmux.report_agent_state(content.id, 'working', os.getpid(), str(linked))
         self.tmux.select_tab(session, original.window, content.id)
-        eventually(lambda: '     └─ ⣷' in capture() or any('     └─ ' + frame in capture()
-                                                        for frame in BRAILLE_WHEEL),
+        eventually(lambda: any(frame + '    └─ ✦' in capture() for frame in BRAILLE_WHEEL),
                    'agent tab was not nested below its checkout')
         git('worktree', 'remove', '--force', str(linked))
         eventually(lambda: '⎇ trees/org/' not in capture(), 'removed checkout remained listed', timeout=12)
@@ -1496,7 +1496,8 @@ class TmuxIntegrationTests(unittest.TestCase):
             self.assertEqual(tab.session, session)
         self.tmux.report_agent_state(pane, "idle")
         self.tmux.run("select-window", "-t", window)
-        eventually(lambda: "─ ✓ " not in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
+        eventually(lambda: not any(line.startswith('✓ ') for line in
+                                   self.tmux.run("capture-pane", "-p", "-t", sidebar.id).splitlines()))
         self.assertFalse(any(tab.id == window for tab in self.tmux.attention_tabs()))
         with self.assertRaisesRegex(WorkmuxError, "sidebar"):
             self.tmux.report_agent_state(sidebar.id, "working")
@@ -1673,11 +1674,11 @@ class TmuxIntegrationTests(unittest.TestCase):
                 self.tmux.run("select-window", "-t", window)
                 self.tmux.report_agent_state(content.id, state, os.getpid())
                 self.tmux.run("send-keys", "-t", content.id, "printf '\\a'", "Enter")
-                eventually(lambda: f"─ {indicator} " in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
+                eventually(lambda: pane_contains_any(self.tmux, sidebar.id, (indicator,)))
                 os.write(master, b"\x1b[<0;3;4M\x1b[<0;3;4m")
                 eventually(lambda: self.tmux.pane(session + ":").id == content.id)
                 eventually(lambda: not any(tab.id == content.window for tab in self.tmux.attention_tabs()))
-                eventually(lambda: f"─ {indicator} " not in self.tmux.run("capture-pane", "-p", "-t", original_sidebar.id))
+                eventually(lambda: not pane_contains_any(self.tmux, original_sidebar.id, (indicator,)))
                 report = json.loads(self.tmux.run("show-options", "-pqv", "-t", content.id, "@workmux-agent"))
                 self.assertEqual(report["state"], state)  # Clearing alerts need not mutate agent reports.
         self.tmux.report_agent_state(content.id, "working", os.getpid())
@@ -1696,7 +1697,8 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.run("set-option", "-s", "focus-events", "on")
         master, _, client = self.attach(first)
         self.tmux.run("send-keys", "-t", attention, "printf '\\a'", "Enter")
-        eventually(lambda: "─ ⚠ " in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
+        eventually(lambda: any(line.startswith('⚠ ') and '✦' in line for line in
+                               self.tmux.run("capture-pane", "-p", "-t", sidebar.id).splitlines()))
         # First workspace, second workspace, then its child: global terminal row 5.
         os.write(master, b"\x1b[<0;3;5M\x1b[<0;3;5m")
         eventually(lambda: self.client_session(client) == second)

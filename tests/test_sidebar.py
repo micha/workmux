@@ -43,7 +43,8 @@ class _StopLoop(Exception):
 
 
 class SidebarLoopTests(unittest.TestCase):
-    def run_loop(self, actions, mouse_events=(), active=True, tabs=(), checkouts=None, windows=None):
+    def run_loop(self, actions, mouse_events=(), active=True, tabs=(), checkouts=None, windows=None,
+                 markers=None):
         """Each action runs after a rendered frame; callable actions can resize."""
         tmux = Mock()
         tmux.repair_width.return_value = Pane("%0", "$0", "@0", True, active,
@@ -69,6 +70,12 @@ class SidebarLoopTests(unittest.TestCase):
             return action(screen, tmux) if callable(action) else action
 
         screen.getch.side_effect = getch
+
+        def draw(screen, y, marker, row, attr, *args):
+            drawn.append((row.key, attr))
+            if markers is not None:
+                markers.append((row.key, marker))
+
         with ExitStack() as stack:
             stack.enter_context(patch("workmux.sidebar.curses.wrapper", side_effect=lambda loop: loop(screen)))
             stack.enter_context(patch("workmux.sidebar.curses.curs_set"))
@@ -78,9 +85,7 @@ class SidebarLoopTests(unittest.TestCase):
             stack.enter_context(patch("workmux.sidebar.curses.BUTTON5_PRESSED", 128, create=True))
             stack.enter_context(patch("workmux.sidebar.status_attributes", return_value={}))
             stack.enter_context(patch("workmux.sidebar.time.monotonic", side_effect=itertools.count()))
-            stack.enter_context(patch("workmux.sidebar.draw_row",
-                                      side_effect=lambda screen, y, marker, row, attr, *args:
-                                      drawn.append((row.key, attr))))
+            stack.enter_context(patch("workmux.sidebar.draw_row", side_effect=draw))
             cache = stack.enter_context(patch("workmux.sidebar.GitStatusCache"))
             cache.return_value.snapshot.return_value = {}
             discovery = stack.enter_context(patch("workmux.sidebar.CheckoutCache"))
@@ -92,6 +97,15 @@ class SidebarLoopTests(unittest.TestCase):
             self.assertTrue(mousemask.call_args.args[0] & 64)
             self.assertTrue(mousemask.call_args.args[0] & 128)
         return frames, tmux
+
+    def test_caret_is_reserved_for_active_workspace_not_agent_or_checkout(self):
+        markers = []
+        tabs = [Tab('$0', '@0', 0, 'agent', 'working', '%9', ('/jobs/repo',))]
+        self.run_loop([], tabs=tabs, checkouts={'$0': ('/jobs/repo',)},
+                      windows={('$0', '/jobs/repo'): '@0'}, markers=markers)
+        self.assertEqual([key for key, marker in markers if marker == '›'], [('$0', None)])
+        self.assertEqual(dict(markers)[('$0', '%9')], ' ')
+        self.assertEqual(dict(markers)[('$0', 'checkout:/jobs/repo')], ' ')
 
     def test_other_workspaces_and_children_are_dim_even_when_selected(self):
         tabs = [Tab('$0', '@0', 0, 'local', 'working'),

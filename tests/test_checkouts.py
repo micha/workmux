@@ -216,8 +216,8 @@ class CheckoutSidebarTests(unittest.TestCase):
         rows = sidebar_rows([self.workspace], tabs, {api: ('dirty', 'ahead'), ui: ('clean',)},
                             self.checkouts, {('$1', api): '@7'})
         self.assertEqual([row.text for row in rows], [
-            '1:job', '├─ ⎇ worktrees/owner/api ● ↑', '│  └─ ⣷ 2:implement',
-            '├─ ⎇ worktrees/owner/ui ✓', '│  └─ ⚠ 3:review', '└─ ⣷ 1:coordinate'])
+            '1:job', '├─ ⎇ worktrees/owner/api ● ↑', '│  └─ ✦ 2:implement',
+            '├─ ⎇ worktrees/owner/ui ✓', '│  └─ ✦ 3:review', '└─ ✦ 1:coordinate'])
         self.assertEqual(rows[1].key, ('$1', 'checkout:' + api))
         self.assertEqual(rows[1].window, '@7')
         self.assertEqual(rows[2].key, ('$1', '%2'))
@@ -231,18 +231,18 @@ class CheckoutSidebarTests(unittest.TestCase):
             with self.subTest(roots=roots):
                 rows = sidebar_rows([self.workspace], [Tab('$1', '@2', 2, 'mixed', 'working', roots=roots)],
                                     {}, self.checkouts)
-                self.assertEqual(rows[-1].text, '└─ ⣷ 2:mixed')
+                self.assertEqual(rows[-1].text, '└─ ✦ 2:mixed')
 
     def test_multiple_roots_within_one_checkout_and_deepest_match(self):
         api, ui = self.paths
         nested = api + '/nested'
         tabs = [Tab('$1', '@2', 2, 'agent', 'working', roots=(nested, nested + '/src'))]
         rows = sidebar_rows([self.workspace], tabs, {}, {'$1': (api, nested)})
-        self.assertEqual(rows[-1].text, '   └─ ⣷ 2:agent')
+        self.assertEqual(rows[-1].text, '   └─ ✦ 2:agent')
         self.assertEqual(rows[-2].directory, nested)
 
     def test_removed_checkout_does_not_hide_its_agent_tab(self):
         tab = Tab('$1', '@2', 2, 'agent', 'working', roots=(self.paths[0],))
         rows = sidebar_rows([self.workspace], [tab], {}, {})
         self.assertEqual(rows[-1].key, ('$1', '@2'))
-        self.assertEqual(rows[-1].text, '└─ ⣷ 2:agent')
+        self.assertEqual(rows[-1].text, '└─ ✦ 2:agent')

@@ -211,12 +211,12 @@ documents and several independent repositories/worktrees. Discovered checkouts
 appear as `⎇` rows with paths relative to the workspace's saved directory:
 
 ```text
-1:job
-├─ ⎇ worktrees/team/backend ● ↑
-│  └─ ⣷ 2:implement
-├─ ⎇ worktrees/team/frontend ✓
-│  └─ ⚠ 3:review
-└─ ⣷ 1:coordinate
+› 1:job
+  ├─ ⎇ worktrees/team/backend ● ↑
+⣷ │  └─ ✦ 2.0:implement
+  ├─ ⎇ worktrees/team/frontend ✓
+⚠ │  └─ ✦ 3.0:review
+⣷ └─ ✦ 1.0:coordinate
 ```
 
 Click a checkout row, or select it with Up/Down or j/k and Enter, to open a tab
@@ -296,10 +296,10 @@ the same window do not affect its placement:
 
 ```text
 › project-a
-  ├─ ⣷ 1:build
-  └─ ⚠ 2:review
+⣷ ├─ ✦ 1.0:build
+⚠ └─ ✦ 2.0:review
   project-b
-  ├─ ✓ 1:changes
+✓ ├─ ✦ 1.0:changes
   └─ ● 2:logs
 ```
 
@@ -310,7 +310,10 @@ the same window do not affect its placement:
 | `✓` | Green | Agent finished its run |
 | `●` | Yellow | Other tmux alert: bell, monitored activity, or silence |
 
-Working tabs use an animated filled Braille wheel; the example above shows one frame.
+Agent status symbols appear in the left gutter; the monochrome spark `✦`
+identifies agent rows in the tree and dims with inactive workspace labels. The `›` caret marks only the active workspace. Gutter indicators retain
+full color even when another workspace's labels are dimmed. Working agents use
+an animated filled Braille wheel; the example above shows one frame.
 Click a child row to focus that tab, including tabs in other workspaces. Keyboard
 navigation with Up/Down or j/k and Enter works for workspace, checkout, and tab rows.
 Each active agent pane gets its own row, even when several share a tab. Selecting

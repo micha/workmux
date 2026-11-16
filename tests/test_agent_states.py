@@ -3,7 +3,7 @@ import io
 import json
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from workmux.cli import main
 from workmux.core import Pane, Tab, Tmux, WorkmuxError, Workspace, _agent_state
@@ -292,10 +292,27 @@ class SidebarTreeTests(unittest.TestCase):
                 self.calls.append(args)
 
         screen = Screen()
-        row = SidebarRow("$1", "@1", "└─ ⣷ 1:build", "working")
-        draw_row(screen, 2, " ", row, 0, {"working": 256}, "⢿")
-        self.assertEqual(screen.calls[0], (2, 0, "  └─ ⢿ 1:build", 79, 0))
-        self.assertEqual(screen.calls[1], (2, 5, "⢿", 1, 256))
+        row = SidebarRow("$1", "@1", "└─ ✦ 1:build", "working")
+        draw_row(screen, 2, "›", row, 0, {"working": 256}, "⢿")
+        self.assertEqual(screen.calls[0], (2, 0, "⢿ └─ ✦ 1:build", 79, 0))
+        self.assertEqual(screen.calls[1], (2, 0, "⢿", 1, 256))
+
+    def test_agent_status_uses_gutter_without_changing_title_or_spark(self):
+        for state, indicator in (('working', '⢿'), ('attention', '⚠'), ('finished', '✓')):
+            for prefix in ('└─', '│  └─', '   └─'):
+                with self.subTest(state=state, prefix=prefix):
+                    screen = Mock()
+                    screen.getmaxyx.return_value = (20, 80)
+                    # A title containing status symbols must be rendered verbatim.
+                    text = f'{prefix} ✦ 2.1:⣷ ⚠ ✓ title'
+                    row = SidebarRow('$1', '@1', text, state, pane='%7')
+                    draw_row(screen, 2, '›', row, curses.A_REVERSE | curses.A_DIM,
+                             {state: 256}, '⢿')
+                    self.assertEqual(screen.addnstr.call_args_list[0].args,
+                                     (2, 0, f'{indicator} {text}', 79, curses.A_REVERSE | curses.A_DIM))
+                    self.assertEqual(screen.addnstr.call_args_list[1].args,
+                                     (2, 0, indicator, 1, curses.A_REVERSE | 256))
+                    self.assertEqual(screen.addnstr.call_count, 2)
 
     def test_only_status_symbol_receives_its_color(self):
         class Screen:
@@ -325,8 +342,8 @@ class SidebarTreeTests(unittest.TestCase):
         rows = sidebar_rows(workspaces, tabs)
         self.assertEqual([row.key for row in rows], [("$1", None), ("$1", "@1"), ("$1", "@2"),
                                                     ("$1", "@3"), ("$2", None), ("$2", "@4")])
-        self.assertEqual([row.text for row in rows], ["1:one", "├─ ⣷ 1:build", "├─ ⚠ 2:question",
-                                                     "└─ ✓ 3:done", "2:two", "└─ ● 1:logs"])
+        self.assertEqual([row.text for row in rows], ["1:one", "├─ ✦ 1:build", "├─ ✦ 2:question",
+                                                     "└─ ✦ 3:done", "2:two", "└─ ● 1:logs"])
 
     def test_workspace_positions_change_without_changing_row_identity(self):
         alpha = Workspace("$8", "alpha", "old label", "/tmp")
