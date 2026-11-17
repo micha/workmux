@@ -168,6 +168,8 @@ def draw_row(screen, position: int, marker: str, row: SidebarRow, attribute: int
     if symbol_x is None:
         symbol_x = text.find(indicator) if indicator else -1
     draw_text(screen, position, text, attribute)
+    if (row.window is not None or row.directory is not None) and row.text.startswith(("├", "└")):
+        draw_text(screen, position, row.text[0], attribute | curses.A_DIM, x=2, max_width=2)
     if indicator and symbol_x >= 0:
         color = colors.get(row.state or "", colors.get("other", 0))
         if color or row.state in AGENT_ROW_STATES:

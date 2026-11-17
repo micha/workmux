@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from workmux.core import ActivitySnapshot, Pane, Tab, Workspace
-from workmux.sidebar import mouse_wheel_delta, run_sidebar, scroll_offset
+from workmux.sidebar import SidebarRow, draw_row, mouse_wheel_delta, run_sidebar, scroll_offset
 
 
 class ScrollGeometryTests(unittest.TestCase):
@@ -36,6 +36,26 @@ class ScrollGeometryTests(unittest.TestCase):
         with patch("workmux.sidebar.curses.BUTTON5_PRESSED", 0, create=True):
             self.assertEqual(mouse_wheel_delta(0), 0)
             self.assertEqual(mouse_wheel_delta(curses.BUTTON4_PRESSED), -3)
+
+
+class TreeRenderingTests(unittest.TestCase):
+    def test_branches_are_dim_without_changing_label_attributes(self):
+        for branch in ("├", "└"):
+            for attribute in (0, curses.A_BOLD, curses.A_REVERSE, curses.A_DIM):
+                for window, directory in (("@1", None), (None, "/jobs/repo")):
+                    with self.subTest(branch=branch, attribute=attribute, directory=directory):
+                        row = SidebarRow("$0", window, f"{branch} label", directory=directory)
+                        with patch("workmux.sidebar.draw_text") as draw:
+                            draw_row(Mock(), 2, " ", row, attribute, {})
+                        self.assertEqual(draw.call_args_list[0].args[3], attribute)
+                        self.assertEqual(draw.call_args_list[1].args[2:],
+                                         (branch, attribute | curses.A_DIM))
+                        self.assertEqual(draw.call_args_list[1].kwargs, {"x": 2, "max_width": 2})
+
+    def test_workspace_label_is_not_treated_as_a_branch(self):
+        with patch("workmux.sidebar.draw_text") as draw:
+            draw_row(Mock(), 2, "›", SidebarRow("$0", None, "└ workspace"), 0, {})
+        draw.assert_called_once()
 
 
 class _StopLoop(Exception):

@@ -289,7 +289,8 @@ class SidebarTreeTests(unittest.TestCase):
         row = SidebarRow("$1", "@1", "└ ✦ 1:build", "working")
         draw_row(screen, 2, "›", row, 0, {"working": 256}, "⢿")
         self.assertEqual(screen.calls[0], (2, 0, "⢿ └ ✦ 1:build", 79, 0))
-        self.assertEqual(screen.calls[1], (2, 0, "⢿", 1, 256))
+        self.assertEqual(screen.calls[1], (2, 2, "└", 1, curses.A_DIM))
+        self.assertEqual(screen.calls[2], (2, 0, "⢿", 1, 256))
 
     def test_agent_status_uses_gutter_without_changing_title_or_spark(self):
         for state, indicator in (('working', '⢿'), ('attention', '⚠'), ('finished', '✓')):
@@ -304,9 +305,9 @@ class SidebarTreeTests(unittest.TestCase):
                              {state: 256}, '⢿')
                     self.assertEqual(screen.addnstr.call_args_list[0].args,
                                      (2, 0, f'{indicator} {text}', 79, curses.A_REVERSE | curses.A_DIM))
-                    self.assertEqual(screen.addnstr.call_args_list[1].args,
+                    self.assertEqual(screen.addnstr.call_args_list[-1].args,
                                      (2, 0, indicator, 1, curses.A_REVERSE | 256))
-                    self.assertEqual(screen.addnstr.call_count, 2)
+                    self.assertEqual(screen.addnstr.call_count, 3 if prefix == '└' else 2)
 
     def test_only_status_symbol_receives_its_color(self):
         class Screen:
@@ -323,7 +324,8 @@ class SidebarTreeTests(unittest.TestCase):
         row = SidebarRow("$1", "@1", "└ ● 1:logs", "alert")
         draw_row(screen, 2, " ", row, curses.A_BOLD, {"other": 1024})
         self.assertEqual(screen.calls[0], (2, 0, "  └ ● 1:logs", 79, curses.A_BOLD))
-        self.assertEqual(screen.calls[1], (2, 4, "●", 1, curses.A_BOLD | 1024))
+        self.assertEqual(screen.calls[1], (2, 2, "└", 1, curses.A_BOLD | curses.A_DIM))
+        self.assertEqual(screen.calls[2], (2, 4, "●", 1, curses.A_BOLD | 1024))
 
     def test_idle_tabs_are_hidden_and_children_are_in_window_order(self):
         workspaces = [Workspace("$1", "one", "first", "/tmp"), Workspace("$2", "two", "second", "/tmp")]
