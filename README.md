@@ -213,11 +213,11 @@ agents are direct children of the workspace:
 
 ```text
 › 1:job
-  ├─ ⎇ backend ● ↑
-  ├─ ⎇ frontend ✓
-⣷ ├─ ✦ 1.0:coordinate
-⣷ ├─ ✦ 2.0:implement
-⚠ └─ ✦ 3.0:review
+  ├ ⎇ backend ● ↑
+  ├ ⎇ frontend ✓
+⣷ ├ ✦ 1.0:coordinate
+⣷ ├ ✦ 2.0:implement
+⚠ └ ✦ 3.0:review
 ```
 
 Checkout labels may repeat when directories share a basename; each row still
@@ -299,11 +299,11 @@ checkouts, regardless of their reported working directories:
 
 ```text
 › project-a
-⣷ ├─ ✦ 1.0:build
-⚠ └─ ✦ 2.0:review
+⣷ ├ ✦ 1.0:build
+⚠ └ ✦ 2.0:review
   project-b
-✓ ├─ ✦ 1.0:changes
-  └─ ● 2:logs
+✓ ├ ✦ 1.0:changes
+  └ ● 2:logs
 ```
 
 | Indicator | Color | State |

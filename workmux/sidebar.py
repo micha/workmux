@@ -85,7 +85,7 @@ def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
         total = len(directories) + len(entries)
         for index, directory in enumerate(directories):
             last = index == total - 1
-            branch = "└─" if last else "├─"
+            branch = "└" if last else "├"
             name = Path(directory).name
             states = git_states.get(directory) or ()
             window = checkout_windows.get((workspace.id, directory))
@@ -93,7 +93,7 @@ def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
                                    f"{branch} ⎇ {_label(name)}{_git_suffix(states)}",
                                    git_states=states, directory=directory))
         for index, tab in enumerate(entries):
-            branch = "└─" if index == len(entries) - 1 else "├─"
+            branch = "└" if index == len(entries) - 1 else "├"
             text = f"{branch} {_tab_label(tab)}"
             rows.append(SidebarRow(workspace.id, tab.id, text, tab.state, pane=tab.pane))
     return rows

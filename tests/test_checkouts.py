@@ -216,8 +216,8 @@ class CheckoutSidebarTests(unittest.TestCase):
         rows = sidebar_rows([self.workspace], tabs, {api: ('dirty', 'ahead'), ui: ('clean',)},
                             self.checkouts, {('$1', api): '@7'})
         self.assertEqual([row.text for row in rows], [
-            '1:job', '├─ ⎇ api ● ↑', '├─ ⎇ ui ✓', '├─ ✦ 1:coordinate',
-            '├─ ✦ 2:implement', '└─ ✦ 3:review'])
+            '1:job', '├ ⎇ api ● ↑', '├ ⎇ ui ✓', '├ ✦ 1:coordinate',
+            '├ ✦ 2:implement', '└ ✦ 3:review'])
         self.assertEqual(rows[1].key, ('$1', 'checkout:' + api))
         self.assertEqual(rows[1].window, '@7')
         self.assertEqual(rows[4].key, ('$1', '%2'))
@@ -231,21 +231,21 @@ class CheckoutSidebarTests(unittest.TestCase):
             with self.subTest(roots=roots):
                 rows = sidebar_rows([self.workspace], [Tab('$1', '@2', 2, 'mixed', 'working', roots=roots)],
                                     {}, self.checkouts)
-                self.assertEqual(rows[-1].text, '└─ ✦ 2:mixed')
+                self.assertEqual(rows[-1].text, '└ ✦ 2:mixed')
 
     def test_nested_checkout_does_not_indent_its_agent(self):
         api, ui = self.paths
         nested = api + '/nested'
         tabs = [Tab('$1', '@2', 2, 'agent', 'working', roots=(nested, nested + '/src'))]
         rows = sidebar_rows([self.workspace], tabs, {}, {'$1': (api, nested)})
-        self.assertEqual(rows[-1].text, '└─ ✦ 2:agent')
+        self.assertEqual(rows[-1].text, '└ ✦ 2:agent')
         self.assertEqual(rows[-2].directory, nested)
 
     def test_duplicate_checkout_basenames_keep_distinct_paths_and_keys(self):
         paths = ('/job/one/repo', '/job/two/repo')
         rows = sidebar_rows([self.workspace], [], checkouts={'$1': paths},
                             checkout_windows={('$1', paths[0]): '@7', ('$1', paths[1]): '@8'})
-        self.assertEqual([row.text for row in rows[1:]], ['├─ ⎇ repo', '└─ ⎇ repo'])
+        self.assertEqual([row.text for row in rows[1:]], ['├ ⎇ repo', '└ ⎇ repo'])
         self.assertEqual([row.directory for row in rows[1:]], list(paths))
         self.assertEqual([row.window for row in rows[1:]], ['@7', '@8'])
         self.assertEqual(len({row.key for row in rows}), 3)
@@ -254,4 +254,4 @@ class CheckoutSidebarTests(unittest.TestCase):
         tab = Tab('$1', '@2', 2, 'agent', 'working', roots=(self.paths[0],))
         rows = sidebar_rows([self.workspace], [tab], {}, {})
         self.assertEqual(rows[-1].key, ('$1', '@2'))
-        self.assertEqual(rows[-1].text, '└─ ✦ 2:agent')
+        self.assertEqual(rows[-1].text, '└ ✦ 2:agent')
