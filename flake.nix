@@ -18,6 +18,7 @@
 
       devShells = forAllSystems (system: {
         default = import ./shell.nix { pkgs = pkgsFor system; };
+        demo = import ./nix/demo.nix { pkgs = pkgsFor system; };
       });
 
       checks = forAllSystems (system: {

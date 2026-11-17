@@ -10,6 +10,10 @@ install tmux startup hooks. The sidebar shows tmux alerts; optional Pi, OpenCode
 Codex, and Claude Code integrations add agent-state indicators and desktop
 notifications when explicitly installed.
 
+![Workmux sidebar with workspaces, Git checkout indicators, and split terminal panes](docs/demo.png)
+
+*Isolated demo with simulated agent activity and terminal output.*
+
 ## Requirements
 
 - Python 3.10 or newer, with `curses`.

@@ -133,6 +133,20 @@ python3 -m pip install -e .
 - Check `git diff --check` before finishing. Update human-facing documentation
   when workflows or limitations change.
 
+### README screenshot
+
+- `scripts/demo.py` stages disposable Git repositories and simulated agent/test
+  output, then captures the real sidebar and panes with VHS. It makes no model
+  calls, uses a private temporary tmux socket and HOME, and cleans up its server.
+- Recreate `docs/demo.png` with
+  `nix develop .#demo --command python scripts/demo.py`. Use `--output PATH` for
+  previews. Outside Nix, supply the Python dependencies, tmux, Git, Bash, VHS,
+  ttyd, FFmpeg, Chromium, and DejaVu Sans Mono; configure VHS's browser/font paths
+  as needed. These tools are optional development dependencies, not runtime ones.
+- The Nix demo shell disables Chromium's sandbox only for VHS's local renderer
+  because the Nix sandbox helper is not configured on every host. Do not use that
+  setting for untrusted pages. Review the PNG before updating the README.
+
 ### Optional Nix tooling
 
 - `flake.nix` exposes the application, development shell, and checks for
