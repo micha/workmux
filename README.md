@@ -1,14 +1,12 @@
 # workmux
 
-A workspace sidebar and sidebar-aware pane layouts for tmux. Start tmux with your
-normal configuration, then explicitly enable workmux in the current session.
-Workspaces are enabled sessions, tabs are tmux windows, and each window gets a
-left sidebar. The remaining area contains ordinary terminal panes.
+Keep projects, Git checkouts, and agent activity visible in a tmux sidebar.
+Workspaces are enabled tmux sessions, tabs are windows, and each window gets a
+left sidebar beside your ordinary terminal panes.
 
-Workmux reads the **running configuration**, not your config files, and does not
-install tmux startup hooks. The sidebar shows tmux alerts; optional Pi, OpenCode,
-Codex, and Claude Code integrations add agent-state indicators and desktop
-notifications when explicitly installed.
+Start tmux with your normal configuration, then enable workmux in the sessions
+you choose. Optional Pi, OpenCode, Codex, and Claude Code integrations add
+agent-state indicators and desktop notifications.
 
 ![Workmux sidebar with workspaces, Git checkout indicators, and split terminal panes](docs/demo.png)
 
@@ -56,13 +54,77 @@ nix profile upgrade workmux
 On older Nix versions, use `nix profile install .` instead of `nix profile add .`.
 The flake supplies Python, its dependencies, and tmux, pinned by `flake.lock`.
 Ensure your Nix profile's `bin` directory is on tmux's `PATH`. Nix outputs are
-provided for `x86_64-linux` and `aarch64-linux`. Private package dependencies do
-not add directories to content shells' `PATH`. Shells or tmux sessions created by
-older versions may retain pinned store paths that shadow profile updates; those
-existing environments are not automatically repaired.
+provided for `x86_64-linux` and `aarch64-linux`.
 
 To build without changing your profile, use `nix build`; the command is then
-available at `./result/bin/workmux`. Nix remains optional.
+available at `./result/bin/workmux`.
+
+After updating either installation, see [Upgrading and troubleshooting](#upgrading-and-troubleshooting)
+to restart existing sidebars.
+
+## Optional tmux configuration
+
+Want workmux enabled automatically? Add the activation hook below to your tmux
+config (`~/.tmux.conf`, or your usual config path). The example also includes a
+manual activation key and optional navigation, sidebar, and notification settings.
+Copy the parts you want into your existing config; do not replace it wholesale.
+
+<details>
+<summary>Commented ~/.tmux.conf example</summary>
+
+```tmux
+# workmux must be on the tmux server's PATH.
+# Put this after plugins that define your window/split/layout bindings.
+
+# Automatically enable newly created sessions, including the first one.
+# Choose another hook index if 90 is already in use.
+set-hook -g after-new-session[90] 'run-shell -b "workmux --socket \"#{socket_path}\" enable --pane \"#{pane_id}\""'
+
+# Prefix, Shift+w: enable this session, or re-enable after reloading config.
+# Choose another key if W is already in use.
+bind-key W run-shell -b 'workmux --socket "#{socket_path}" enable --pane "#{pane_id}" --client "#{client_name}"'
+
+# Optional: click sidebar rows and scroll with the mouse wheel.
+# set -g mouse on
+
+# Optional: return focus immediately from the sidebar to content.
+# Mouse navigation still works, but sidebar keyboard navigation is unavailable.
+# Leave this off for Up/Down or j/k navigation inside the sidebar.
+# set -g focus-events on
+
+# Optional: preferred sidebar width and checkout discovery depth (defaults: 36, 6).
+# set -g @workmux-sidebar-width 30
+# set -g @workmux-checkout-max-depth 3
+
+# Optional prefix bindings; these replace any existing bindings for these keys.
+# Up/Down includes all tmux sessions, not only workmux workspaces.
+# bind-key Up switch-client -p
+# bind-key Down switch-client -n
+# bind-key Left previous-window
+# bind-key Right next-window
+# bind-key s run-shell -b 'workmux --socket "#{socket_path}" sidebar toggle-focus --pane "#{pane_id}"'
+
+# Agent attention/finished indicators need native alerts; monitor-bell defaults on.
+# set -g monitor-bell on
+
+# Optional: desktop notifications from installed agent integrations.
+# Requires OSC 9 support and notification permissions in your terminal/desktop.
+# 'all' includes hidden panes; 'on' permits visible panes only.
+# Passthrough allows arbitrary terminal controls: enable only for trusted workloads.
+# set -g allow-passthrough all
+
+# Optional: activity symbols beside tab names. Uncomment both lines.
+# These replace your window formats; adapt them if you already customize the bar.
+# set -g window-status-format ' #{?#{&&:#{==:#{@workmux},1},#{@workmux-agent-indicator}},#{@workmux-agent-indicator} ,}#I:#W#F '
+# set -g window-status-current-format ' #{?#{&&:#{==:#{@workmux},1},#{@workmux-agent-indicator}},#{@workmux-agent-indicator} ,}#I:#W#F '
+```
+
+</details>
+
+Reload your config normally (for example, `tmux source-file ~/.tmux.conf` if that
+is your config path), then run `workmux enable` or press prefix, Shift+w in each
+existing session you want to enable. The hook enables new sessions only. If
+plugins replace bindings asynchronously, re-enable after they finish.
 
 ## Enable in your existing tmux session
 
@@ -72,148 +134,81 @@ Start tmux normally. Inside a terminal pane, run:
 workmux enable
 ```
 
-Workmux infers the socket from `TMUX` and the source pane from `TMUX_PANE`.
-It enables **only that session**:
+Workmux adds a sidebar to each window in **only that session**, without restarting
+content processes. It preserves your current window, active panes, zoom, session
+names, prefix, status styling, mouse settings, and existing hooks.
 
-- Adds one sidebar to each existing window, without restarting content processes.
-- Preserves the current window, active panes, and zoom state.
-- Preserves your prefix, status styling/position, mouse settings, and unrelated bindings.
-- Registers a guarded runtime sidebar-focus hook, preserving existing hooks and
-  leaving `focus-events` unchanged. No tmux configuration files are edited.
-- Adapts supported window-creation, split, and layout bindings while preserving
-  their keys, key tables, repeat flags, and notes.
-- Leaves existing session names unchanged; the sidebar orders enabled workspaces
-  by name and displays their 1-based position as `<index>:<session-name>`, for
-  example `1:workmux`. Positions change when workspaces are added, removed, or
-  renamed; they are not tmux session IDs.
+It reads your running tmux configuration and adapts supported window-creation,
+split, and layout bindings to leave room for the sidebar. The same bindings keep
+their original behavior in other sessions. No config files are edited; startup
+hooks and additional keybindings are opt-in.
 
-Bindings are server-wide in tmux. Adapted bindings use a session-local guard:
-enabled sessions invoke workmux, while other sessions execute the original tmux
-command. The sidebar lists enabled sessions only. Enable other sessions using the
-same command if you want them listed as workspaces.
+Repeat `workmux enable` in other sessions to list them as workspaces. After
+reloading your tmux config, run it again to update binding adaptations and add
+missing sidebars without duplicating existing ones.
 
-### Activation keybinding
-
-Optionally put this in your own tmux config:
-
-```tmux
-bind-key W run-shell -b 'workmux --socket "#{socket_path}" enable --pane "#{pane_id}" --client "#{client_name}"'
-```
-
-Press **your prefix**, then **Shift+w**. The explicit socket/pane/client identify
-the invoking context. `--client` also displays a concise status message instead
-of opening a command-output view for warnings. Run `workmux enable` in a shell
-for detailed warnings. Choose another activation key if W is already in use.
-
-This binding is not installed automatically, and no attachment hook is added.
-
-### Optional automatic activation
-
-To enable workmux whenever tmux creates a session, add this to your own tmux config:
-
-```tmux
-set-hook -g after-new-session[90] 'run-shell -b "workmux --socket \"#{socket_path}\" enable --pane \"#{pane_id}\""'
-```
-
-This covers the first session when the server starts and later new sessions.
-The indexed hook preserves other entries; choose another index if `90` is in use.
-Reload your config with `tmux source-file ~/.tmux.conf`, then run `workmux enable`
-for the current session. Loading the hook does not activate existing sessions.
-Workmux must be on the server's PATH. If plugins replace bindings asynchronously,
-re-enable after they finish. The hook is opt-in and is never installed by workmux.
-
-### After reloading your tmux config
-
-Run **the same command or keybinding again**:
-
-```sh
-workmux enable
-```
-
-It reads the newly evaluated bindings, updates supported adaptations, and adds
-any missing sidebars. Existing sidebars are not duplicated and wrappers are not
-wrapped again. Updated native bindings become the new fallback/original commands.
-Unsupported replacements remain untouched, rather than being overwritten with a
-stale snapshot. If you unbind a key, re-enabling does not recreate it.
-
-Workmux does not generate or reload tmux configuration; reload your own config
-normally, then re-enable. Owned sidebar-focus hooks are not duplicated on
-re-enable, and edited or removed owned entries are left alone. If a plugin adds
-new window- or pane-local focus hooks after activation, re-enable to extend those
-arrays without replacing the plugin's entries.
-
-### Which bindings are adapted?
-
-Workmux supports **single, direct command bodies**:
-
-| Native command | Supported arguments |
-| --- | --- |
-| `new-window` / `neww` | `-d`, `-n`, `-c`, optional shell command |
-| `split-window` / `splitw` | `-b`, `-d`, `-h`, `-v`, `-c`, `-l`, `-p`, optional shell command |
-| `select-layout` / `selectl` | Named standard layout, no argument, `-E`, `-n`, or `-p` |
-| `next-layout` / `nextl` | No arguments |
-| `previous-layout` / `prevl` | No arguments |
-
-Directory and name formats use the invoking content pane. Detached creation
-flags, pane sizing, and shell commands retain their native behavior.
-
-Explicit targets (`-t`), full-window splits (`-f`), zoom flags (`-Z`), custom layout
-strings, abbreviated layout names, `select-layout -o`, and compound or quoted
-command bodies are not adapted. Relevant unsupported direct bindings produce
-warnings and remain unchanged. Unparseable live output is also skipped; tmux 3.6a,
-for example, does not quote whitespace-containing table names in `list-keys` output.
-
-Menus, shell scripts, conditionals, and command templates are out of scope: their
-nested commands are not rewritten, and their presence does not produce warnings
-about direct workspace actions. Stock context menus keep their native behavior.
-Stock tmux bindings enable without adaptation warnings.
-
-Plugins or includes that already created direct bindings are covered because we
-inspect live state. If a plugin later replaces them asynchronously, run enable
-again. Plugins and hooks that invoke tmux commands internally are not intercepted
-and may move the sidebar; use a workmux layout to repair it afterward.
-
-Sessions sharing windows with other sessions are rejected before activation;
-sidebar panes cannot be scoped independently when the underlying window is shared.
-Disabling/restoring an enabled session is not implemented in this version.
+**Current limitations:** one attached client per session is supported. Sessions
+sharing windows with other sessions cannot be enabled. There is no disable/restore
+command yet.
 
 ## Navigation and layouts
 
-Your existing keys remain in effect. With stock tmux bindings, prefix+c creates
-a window with a sidebar, prefix+% and prefix+" split content, prefix+Alt+1 through
-Alt+7 retile content, prefix+Space cycles layouts, and prefix+E balances adjacent
-content panes after enabling.
+Your existing keys remain in effect. With stock tmux bindings:
 
-In the sidebar, click a workspace if tmux mouse support is enabled. The `›`
+| Key sequence | Action after enabling |
+| --- | --- |
+| prefix, c | Create a tab with a sidebar |
+| prefix, % / prefix, " | Split content right / down |
+| prefix, Alt+1–5 | Apply a standard layout to content |
+| prefix, Space | Cycle layouts |
+| prefix, E | Balance adjacent content panes |
+
+Newer tmux versions also bind Alt+6–7 to mirrored layouts. Workmux adapts the
+bindings you have; it does not add missing keys. Use `workmux layout --help`
+for all available layouts.
+
+Click a workspace in the sidebar if tmux mouse support is enabled. The `›`
 marker identifies the current workspace; other workspaces and their child rows
-use dimmed text and status colors. Workspace selection restores the destination
+are dimmed. Tree branches are always dimmed. Selection restores the destination
 session's selected tab.
 
-With tmux's `focus-events` option on, workmux's runtime `pane-focus-in` hook returns
-focus to the previously active content pane whenever the sidebar gains focus.
-Clicks and scrolling still work, including clicking blank space without leaving
-the sidebar focused. This is immediate focus restoration, not a non-focusable
-pane; keyboard navigation inside the sidebar is unavailable in this mode.
-Workmux does not turn `focus-events` on or off. tmux may require detaching and
-reattaching clients after you change that option.
+Workspaces are ordered by session name and labeled `<index>:<session-name>`,
+for example `1:workmux`. These 1-based positions can change when sessions are
+added, removed, or renamed; they are not tmux session IDs.
 
 With `focus-events` off (tmux's default), focus the sidebar using ordinary pane
-navigation and use Up/Down or j/k followed by Enter. Escape/q returns to the
-remembered content pane.
+navigation, then use Up/Down or j/k and Enter. Escape/q returns to the previous
+content pane. Keyboard navigation scrolls to keep the selection visible.
 
-When the tree is taller than the sidebar, keyboard navigation scrolls to keep
-its selection visible. With tmux's `mouse` option enabled, the mouse wheel over
-the sidebar scrolls three rows at a time without changing focus or activating a
-workspace or tab. Click a visible row to select it; keyboard navigation resumes
-following the highlighted row. Wheel scrolling requires terminal/tmux mouse
-support and a curses build that exposes the corresponding wheel buttons.
+With `focus-events` on, focus returns immediately to the previous content pane
+when the sidebar gains focus. Clicking and scrolling still work, but keyboard
+navigation inside the sidebar is unavailable. Workmux leaves this option
+unchanged; tmux may require detaching and reattaching after you change it.
+
+With tmux's `mouse` option enabled, the wheel over the sidebar scrolls three rows
+at a time without changing focus or activating a row. Click a visible row to
+select it; keyboard navigation resumes following the selection. Wheel support
+also depends on your terminal and curses build.
+
+### Layouts
+
+Retiling affects only content; the sidebar stays full-height at the left edge.
+It preserves pane processes and focus, exits zoom, and can repair a sidebar
+misplaced by a raw tmux layout command. Mirrored layouts retain the same main
+content pane. `main-pane-width` and `main-pane-height` are honored, with percentages
+relative to the content area; other native layout tuning options are unsupported.
+
+Balancing (`select-layout -E` or `workmux layout balance`) keeps the existing
+split structure and focus rather than applying a preset. It does not change the
+layout remembered for cycling or spread the sidebar with content. Pane border
+status is honored, but balancing with pane scrollbars enabled is rejected; use
+a named preset instead.
 
 ### Checkouts and worktrees
 
-A workspace may be a repository or a plain container directory holding job
-documents and several independent repositories/worktrees. Discovered checkouts
-appear as `⎇` rows labeled with their directory's last component. Checkouts and
-agents are direct children of the workspace:
+A workspace can be a repository or a directory containing several repositories
+or worktrees. Discovered checkouts appear as `⎇` rows labeled with the directory
+basename. Checkouts and agents are direct children of the workspace:
 
 ```text
 › 1:job
@@ -227,24 +222,26 @@ agents are direct children of the workspace:
 Checkout labels may repeat when directories share a basename; each row still
 targets its own full checkout path.
 
-Click a checkout row, or select it with Up/Down or j/k and Enter, to open a tab
-in that directory **within the parent workspace**. Later selections focus that
-associated tab, even if it has been renamed or its shell has changed directory.
-Closing the tab allows the next selection to open a fresh one. Discovery itself
-creates no tabs, sessions, repositories, branches, or worktrees.
+Select a checkout to open a tab in that directory **within the parent workspace**.
+Later selections focus the same tab, even after renaming it or changing its shell
+directory. Closing the tab allows the next selection to open a fresh one.
+Discovery itself creates no tabs, repositories, branches, or worktrees.
 
-Discovery runs in the background, normally every five seconds. It recognizes
-`.git` directories and linked-worktree `.git` files up to six directory levels
-below the saved directory, including inside existing checkouts. No particular
-directory or branch naming convention is required. Git's registered worktrees
-are also checked, subject to the same containment and depth limits. Worktrees
-outside the workspace are not listed. Discovery walks directory names only:
-file contents and `.git` contents are never scanned. Discovered directory
-symlinks are not followed, and missing directories are skipped. Each scan is
-limited to 2,000 directories, 16,000 directory entries, 128 Git queries, 64 checkouts,
-and a four-second time budget; large trees may therefore yield only a partial
-list. Paths containing tabs or
-newlines are unsupported, as with workspace directories.
+Discovery runs in the background, normally every five seconds, up to six levels
+below the saved workspace directory, including inside existing checkouts. It
+recognizes repositories and linked worktrees without relying on naming conventions.
+Worktrees outside the workspace and discovered directory symlinks are excluded;
+file contents and `.git` contents are not scanned. Large trees may be only
+partially listed. Paths containing tabs or newlines are unsupported.
+
+<details>
+<summary>Discovery scan limits</summary>
+
+Each scan is limited to 2,000 directories, 16,000 directory entries, 128 Git
+queries, 64 checkouts, and four seconds. Increasing the depth does not raise
+these limits.
+
+</details>
 
 Set the maximum depth globally or override it for one workspace session:
 
@@ -254,7 +251,7 @@ tmux set-option -t my-workspace @workmux-checkout-max-depth 3
 ```
 
 Changes trigger a new background scan without restarting sidebars. Depth counts
-directory levels below the saved workspace directory: `worktrees/adzerk/bifrost`
+directory levels below the saved workspace directory: `worktrees/team/backend`
 is depth 3. A value of `0` disables discovery below the workspace root. Unset,
 negative, or invalid values use the default of 6. Higher depths remain subject
 to the other scan budgets.
@@ -262,8 +259,8 @@ to the other scan budgets.
 Every checkout has its own Git indicators. The workspace's indicators still
 refer only to its saved directory, not an aggregate of nested repositories.
 Removing a checkout removes its discovered row, **not its live tabs or content**.
-Any agent-state tab it contained remains visible directly under the workspace.
-Pushes, PRs, cleanup, and archiving remain outside workmux.
+Agent rows remain direct children of the workspace. Workmux does not manage
+pushes, pull requests, or checkout cleanup.
 
 ### Git status
 
@@ -297,15 +294,14 @@ block sidebar navigation.
 
 ### Activity tree
 
-Agent panes and tabs with native tmux alerts appear directly beneath their
-workspace, alongside discovered checkouts. Agents are not nested beneath
-checkouts, regardless of their reported working directories:
+Agent panes and tabs with native tmux alerts appear beneath their workspace,
+alongside checkouts:
 
 ```text
-› project-a
+› 1:project-a
 ⣷ ├ ✦ 1.0:build
 ⚠ └ ✦ 2.0:review
-  project-b
+  2:project-b
 ✓ ├ ✦ 1.0:changes
   └ ● 2:logs
 ```
@@ -317,67 +313,25 @@ checkouts, regardless of their reported working directories:
 | `✓` | Green | Agent finished its run |
 | `●` | Yellow | Other tmux alert: bell, monitored activity, or silence |
 
-Agent status symbols appear in the left gutter; the monochrome spark `✦`
-identifies agent rows in the tree and dims with inactive workspace labels. The `›` caret marks only the active workspace. Gutter indicators retain
-full color even when another workspace's labels are dimmed. Working agents use
-an animated filled Braille wheel; the example above shows one frame.
-Click a child row to focus that tab, including tabs in other workspaces. Keyboard
-navigation with Up/Down or j/k and Enter works for workspace, checkout, and tab rows.
+Agent status symbols occupy the left gutter and retain full color in inactive
+workspaces. The `✦` identifies an agent row; the working indicator is animated.
 Each active agent pane gets its own row, even when several share a tab. Selecting
-an agent row focuses that specific pane. Agent labels use `window.pane:title`
-(for example, `2.1:π - workmux`), with tmux's current window and pane indexes.
-Rows display the agent pane's terminal title regardless of which pane is focused,
-falling back to the tab name. Pane indexes can change as panes are rearranged;
-navigation tracks stable pane IDs instead. Workspace names and native-alert tab names are unchanged.
-Tabs are listed in window-index order beneath the checkout rows; renaming or reordering
-them does not break their click targets. Idle tabs without alerts are hidden,
-while discovered checkout rows remain visible.
+one focuses that specific pane, including in another workspace.
 
-With several agents in one tab, pending attention is listed before working,
-then pending finished. The tab's tmux status indicator uses the same priority. Attention and finished indicators classify native tmux
-alerts: clearing an alert removes passive agent rows. Working agent rows remain
-visible even without an alert. Native alerts
-appear when there is no applicable agent state to show, and all alert indicators
-follow tmux's normal clearing behavior.
+Labels use `window.pane:title`, for example `2.1:build`, using the pane's terminal
+title or falling back to the tab name. Rows follow window-index order beneath
+checkouts; within a tab, attention comes before working, then finished. Renaming
+or rearranging panes does not break navigation. Idle tabs without alerts are hidden.
 
-Agent states come from explicit reports, not from guessing which shell commands
-are agents. Dead agent processes are ignored when the integration supplies their
-process ID. Reported roots do not affect sidebar placement: every agent row is a
-direct child of its workspace. Bundled integrations still report roots as
-metadata; custom reporters can pass an absolute `--root` to `workmux agent state`
-(repeat `--root` when one reporter aggregates multiple root sessions).
+**Attention and finished states require a pending tmux alert.** Clearing the alert
+hides those rows; working agents remain visible without an alert. Other native
+alerts appear when there is no applicable agent state. Workmux preserves tmux's
+normal alert monitoring and clearing behavior.
 
 Install an [agent integration](#optional-agent-integrations) for automatic reports.
-Native tmux alerts need no agent integration; their monitoring settings remain
-your responsibility.
-
-### Window status indicators
-
-Running sidebars also publish each managed window's activity symbol in the
-window-local `@workmux-agent-indicator` option. It uses the same states, priority,
-and native alert-clearing rules as the sidebar: an animated Braille wheel for
-working, `⚠` for attention, `✓` for finished, and `●` for other native alerts.
-Idle windows have an empty indicator. The value is plain text, without colors
-or Git status suffixes; window names are unchanged.
-
-To opt in, add the indicator before the index and name in both window formats:
-
-```tmux
-set -g window-status-format ' #{?#{&&:#{==:#{@workmux},1},#{@workmux-agent-indicator}},#{@workmux-agent-indicator} ,}#I:#W#F '
-set -g window-status-current-format ' #{?#{&&:#{==:#{@workmux},1},#{@workmux-agent-indicator}},#{@workmux-agent-indicator} ,}#I:#W#F '
-```
-
-The guard leaves non-workmux sessions with the usual index, name, and native
-flags. Adapt the surrounding format to your existing styling; `enable` never
-installs or changes these formats for you. Animation uses the sidebar's eight
-frames per second without changing `status-interval`, including when it is zero.
-One live sidebar publishes batched updates for the server; static indicators
-write only when they change. Another sidebar takes over if the publisher exits.
-State changes follow the sidebar's normal snapshot refresh.
-
-After updating workmux, run `workmux sidebar reload` to restart existing sidebars
-with the new installation. Indicators require at least one running sidebar on
-the server.
+Agent states are explicitly reported, not guessed from running commands; stale
+reports are ignored when the integration supplies a process ID. Native tmux
+alerts need no integration, but their monitoring settings remain your responsibility.
 
 ### Closing tabs and workspaces
 
@@ -391,41 +345,10 @@ pane-kill command. Cleanup happens on the sidebar's next refresh, normally withi
 pane, and `detach-on-destroy` controls whether a client detaches or switches to
 another session when the workspace ends.
 
-### Optional navigation bindings
-
-You can add explicit navigation bindings yourself, for example:
-
-```tmux
-bind-key Up switch-client -p
-bind-key Down switch-client -n
-bind-key Left previous-window
-bind-key Right next-window
-bind-key s run-shell -b 'workmux --socket "#{socket_path}" sidebar toggle-focus --pane "#{pane_id}"'
-```
-
-Native previous/next workspace navigation includes all sessions in that server,
-including sessions not enabled in workmux. No custom workspace reordering UI is
-implemented.
-
-Retiling affects only content. The sidebar stays full-height at the left edge.
-Retiling preserves pane processes and focus, exits zoom, and can repair a sidebar
-misplaced by a raw native layout preset. Mirrored layouts retain the same main
-content pane. `main-pane-width` and `main-pane-height` are honored; percentages
-refer to the content area. Other native layout tuning options are not implemented.
-
-Balancing (`select-layout -E` or `workmux layout balance`) uses native tmux sibling
-balancing inside the content area. It retains the content split structure and
-focus rather than switching to a preset, and does not change the remembered
-preset used by layout cycling. Already-balanced groups and a single content pane
-do not cause tmux to spread the sidebar and content. Pane border status is honored;
-balancing with enabled pane scrollbars is currently rejected without changing
-the layout. Use a named preset in that case.
-
 ## CLI helpers
 
 ```sh
 workmux workspace list
-workmux workspace list --json
 workmux workspace new project-b --dir /path/to/project-b
 workmux workspace select project-b
 workmux workspace select --index 3
@@ -436,34 +359,30 @@ workmux layout tiled
 workmux layout next
 workmux layout balance
 workmux sidebar toggle-focus
-workmux sidebar reload       # Restart all owned sidebars on the selected server
 ```
 
 Inside tmux, commands default to its server. Outside tmux, the default server is
 named `workmux`. Explicit `--server NAME` or `--socket PATH` overrides inference
 and must appear before the subcommand. Pane-oriented commands accept `--pane ID`.
-`workspace select` requires an attached client; the sidebar supports one attached
-client per session. Use `workspace select --index N` to select by the 1-based
-workspace prefix in the sidebar (not a tmux session ID or a checkout/tab row).
-Indexes follow the sidebar's lexical session-name order and can change when
-workspaces are added, removed, or renamed; prefer names or IDs in scripts.
-A positional numeric target still selects a workspace with that name.
-Run `workmux --help` or a subcommand's help for argument syntax.
-`dispatch` is an internal command for adapted keybindings, not a user workflow.
+`workspace select` requires an attached client. Its `--index N` refers to the
+workspace's 1-based sidebar position, not a tmux ID or a checkout/agent row.
+Prefer names or IDs in scripts, since positions can change. A positional numeric
+target selects a workspace with that name.
+
+Run `workmux --help` or a subcommand's help for full syntax and JSON output options.
 
 ### Optional isolated-server workflow
 
-You can still create workspaces on a separate server, from outside tmux:
+From outside tmux, create a workspace on a separate server:
 
 ```sh
 workmux --server workmux-demo workspace new project-a --dir /path/to/project-a --attach
 ```
 
-This workflow skips the user's startup config and uses internal workmux defaults:
-top tabs, mouse support, prefix+Up/Down for workspaces, Left/Right for tabs, c for a
-new tab, s for sidebar focus, %/" for splits, and Alt+1–7/Space for layouts.
-New sessions use the requested workspace name without a numeric prefix.
-These defaults are not applied by `enable` to an existing server.
+A new server skips your tmux config and uses workmux defaults: top tabs, mouse
+support, and prefix followed by Up/Down for sessions, Left/Right for tabs, c for
+a new tab, s for sidebar focus, %/" for splits, and Alt+1–7/Space for layouts.
+These defaults are not applied when enabling an existing server.
 
 After detaching, remove only the demonstration server with:
 
@@ -476,20 +395,15 @@ tmux -L workmux-demo kill-server
 Install an integration on the machine where its harness runs:
 
 ```sh
-workmux install       # Read-only listing of supported harnesses and disk status
-workmux install pi
-workmux install opencode
-workmux install codex
-workmux install claude
-# Remove an integration with the corresponding command, for example:
-workmux uninstall codex
+workmux install          # List supported harnesses and installation status
+workmux install pi       # Or: opencode, codex, claude
+workmux uninstall pi     # Remove it later
 ```
 
-Only install the integrations you use. The listing reports conflicts, incomplete
-installations, and available updates; it does not detect installed harness
-executables or confirm that an integration is loaded in a running session.
-`workmux` must be on the harness's `PATH`. Installation does not change tmux
-preferences, harness settings, hook trust decisions, or project configuration.
+Only install the integrations you use, and put `workmux` on the harness's `PATH`.
+The listing is read-only: it reports conflicts and available updates, not whether
+a harness is installed or a running session has loaded the integration.
+Installation preserves harness settings, hook trust, and project configuration.
 
 | Harness | Managed files or entries under its personal configuration directory | Directory override |
 | --- | --- | --- |
@@ -507,49 +421,34 @@ Run `/reload` in Pi after installing or uninstalling. Test with
 `/workmux-notify-test`, then switch away from your terminal within three seconds.
 Some terminals suppress desktop notifications while focused.
 
-The extension reports working state at the start of a run, attention while a
-blocking agent question/confirmation/input dialog is open, and finished after all
-retries and queued continuations. Errors and interruptions report attention.
-Closing the dialog returns the agent to working state. Exiting or reloading Pi
-clears an idle agent's state; reloading during a run restores working state.
+Pi reports working during a run, attention while a blocking input dialog is open,
+and finished after retries and queued continuations settle. Closing a dialog
+returns to working; errors and interruptions report attention. Reloading restores
+a running agent's state and clears an idle one.
 
-Desktop notifications are also sent for blocking dialogs and completed runs.
-A question in the final text reply is still shown as "Finished — ready for input";
-the extension does not guess whether prose is a question. Finished means the
-agent stopped, not necessarily that the requested task succeeded. State reports
-and notifications are disabled in non-interactive/RPC runs.
-
-Sidebar state reporting does not require terminal notification support or tmux
-passthrough. Pi calls `workmux` on its PATH to report state in its own tmux pane;
-a missing command or reporting failure does not stop the agent.
+Desktop notifications accompany blocking dialogs and completed runs. A question
+in final reply text still counts as finished: the extension does not interpret
+prose, and finished does not imply success. Reporting and notifications are
+inactive in non-interactive/RPC mode. Reporting failures do not stop the agent.
 
 ### OpenCode integration
 
-Restart the local OpenCode TUI after installation/removal. Its global plugin
-loader discovers the bundled JavaScript file automatically; no npm dependencies
-or config entries are added. Busy/retry events report working, permission and
-question dialogs report attention, and idle after a run reports finished. Errors
-report attention, and answering/dismissing dialogs restores the underlying state.
-Subagent sessions are ignored; multiple root sessions prefer attention over
-working over finished. Startup idle events do not send completion notifications.
+Restart the local OpenCode TUI after installation/removal; it discovers the
+plugin automatically without npm dependencies or config entries. Busy/retry
+reports working, permission and question dialogs report attention, and idle after
+a run reports finished. Errors report attention; dismissing a dialog restores
+the underlying state. Startup idle does not trigger a completion notification.
+Subagents are ignored; multiple root sessions prefer attention, then working,
+then finished.
 
-The integration is for the local, terminal-attached TUI. Headless `run`, `serve`,
-`web`, `acp`, and debug invocations are ignored; attaching to a remote server is
-not supported. Reports are serialized and best-effort.
+Only the local, terminal-attached TUI is supported. Headless `run`, `serve`, `web`,
+`acp`, debug invocations, and remote-server attachment are not supported.
 
 ### Codex and Claude Code integrations
 
-Codex discovers the personal `hooks.json` automatically. Restart Codex and approve
-the workmux hooks in `/hooks`; hooks must be enabled. Workmux never grants trust
-or changes `config.toml`. Installation merges workmux's hook groups into an existing
-`hooks.json`, preserving unrelated hooks, matchers, and top-level settings. Each
-workmux group carries its own checksum; unrelated edits and JSON reformatting do
-not prevent updates. Uninstall removes only verified workmux groups, leaving shared
-configuration in place (or deleting the file if only workmux's hooks remained).
-Invalid/ambiguous JSON and edited workmux groups are conflicts and are left untouched.
-Manually added, unmarked commands are not adopted; remove duplicate workmux commands
-yourself before installing. Intact older whole-file workmux installations migrate
-automatically; edited legacy installations still require manual reconciliation.
+Codex discovers the personal `hooks.json` automatically. Restart Codex, enable
+hooks, and approve the workmux hooks in `/hooks`. Workmux never grants trust or
+changes `config.toml`; its hook groups are merged into any existing `hooks.json`.
 
 Claude Code auto-loads `skills/workmux` as the `workmux@skills-dir` plugin. This
 installation mode requires Claude Code 2.1.223 or newer. Run `/reload-plugins` or
@@ -557,29 +456,17 @@ restart Claude Code after installation/removal. No marketplace registration or
 `settings.json` changes are needed. Do not also load this plugin with `--plugin-dir`,
 as that can duplicate its hooks.
 
-Both integrations report working on user prompts/tool hooks, attention on
-permission requests and blocking question tools, finished on `Stop`, and idle
-on session start/end. Claude also handles permission/elicitation notifications.
-After a permission prompt, working resumes at the next tool lifecycle hook, not
-necessarily at the instant approval is granted. Child-agent hooks are ignored.
-`Stop` means the harness stopped, not that the task succeeded; another stop hook
-can still cause it to continue. Errors and interruptions without a corresponding
-hook event are not classified separately. Closed agent processes are ignored
-through their recorded harness PID, not the short-lived hook process's PID.
+Both report working on user prompts/tool hooks, attention on permission requests
+and blocking questions, finished on `Stop`, and idle on session start/end.
+Claude also handles permission/elicitation notifications. Working resumes after a
+permission prompt at the next tool hook, not necessarily upon approval. Child
+agents are ignored. A stop event does not imply success and another hook may
+continue the run; errors without a corresponding hook event are not classified.
 
-Command hooks receive piped stdout, so verifying a real interactive terminal
-currently requires **Linux procfs**. The handler verifies the harness's controlling
-terminal and foreground process group, then writes through its terminal stdout
-descriptor; it does not require the hook process itself to have a controlling
-terminal (Claude launches detached hook sessions). Reporting and notifications are skipped if
-the harness is headless, remote, backgrounded, has redirected stdout, or its
-foreground terminal cannot be verified. Hook stdout stays empty: these commands
-never approve permissions, block completion, or emit hook-protocol decisions.
-Reporting has a two-second timeout; missing workmux or a closed pane is best-effort.
-
-Discovery/schema checks were validated with OpenCode 1.18.34, Codex 0.146.0, and
-Claude Code 2.1.223 on Linux. Tests also cover event payloads and private tmux
-state reporting; model-backed end-to-end sessions have not been validated.
+These two integrations currently require **Linux procfs** to verify the harness's
+foreground terminal. Reporting and notifications are skipped for headless, remote,
+backgrounded, or redirected runs, or when the terminal cannot be verified.
+Hooks never approve permissions or block completion; reporting failures are ignored.
 
 ### Other agent integrations
 
@@ -592,97 +479,161 @@ workmux agent state finished
 workmux agent state idle       # Clear the report
 ```
 
-Use `--pane PANE_ID` for an explicit target and `--pid PID` to tie the report to
-the agent process's lifetime. Reports can be made before enabling workmux, but
-only enabled workspaces display them. Working reports show immediately; attention
-and finished reports classify pending tmux alerts, so also emit a bell or another
-monitored alert when reporting those states. The bundled integrations send a bell
-automatically. There is one report per pane; agents in separate panes are
-aggregated into their tab's indicator.
+Use `--pane PANE_ID` to target a pane and `--pid PID` to tie the report to the
+agent's lifetime. Only enabled workspaces display reports. Working shows without
+an alert; attention and finished also require a bell or another monitored tmux
+alert. Bundled integrations send the bell automatically. Each pane has one
+report; the tab's indicator aggregates its agents. Optional absolute `--root`
+metadata does not change sidebar placement.
 
 ### Terminal setup
 
-Desktop notifications require a terminal that supports **OSC 9 notifications**.
-Enable notifications in that terminal's settings and allow them in your desktop's
-notification settings. The integrations also send a separate bell for tmux's
-status-bar alert, which requires `monitor-bell on`.
+Sidebar reporting works without desktop notifications or passthrough. Desktop
+notifications require a terminal supporting **OSC 9 notifications**, permission
+in its settings and your desktop's notification settings, and an attached terminal.
+Integrations send a separate bell for tmux alerts, requiring `monitor-bell on`.
 
-Inside tmux, enable notification passthrough yourself:
-
-```tmux
-set -g allow-passthrough all
-```
-
-`on` allows visible panes only; `all` also allows hidden panes. Passthrough permits
-applications to send terminal controls directly, not only notifications, so use it
-only with trusted workloads. Workmux does not change these settings for you.
+Enable `allow-passthrough` as shown in the
+[config example](#optional-tmux-configuration): `on` allows visible panes only;
+`all` also allows hidden panes. This permits arbitrary terminal controls, not only
+notifications, so use it only with trusted workloads.
 
 Over SSH, configure passthrough on the machine running tmux and notification
 permissions on your local desktop. Notifications travel through the terminal
-connection; no desktop forwarding is needed. A terminal must remain attached;
-nested tmux is not supported by these integrations.
+connection; no desktop forwarding is needed. Nested tmux is unsupported.
 
 ### Installation safety
 
-The commands manage only the files or Codex hook groups listed above. Installation
-is idempotent and updates intact older workmux copies. Symlinked configuration
-directories are supported and their links are left unchanged. Both operations
-refuse symlinks at managed file paths. Except for Codex's shared `hooks.json`, files
-whose workmux checksum is missing or no longer matches are conflicts; reconcile
-edited/conflicting integrations manually first. For bundles, all files are checked
-before any are changed. Unrelated files, hooks, extensions, and settings are
-preserved. Uninstalling a missing integration creates no directories.
+Install and uninstall manage only the listed workmux files or Codex hook groups,
+preserving unrelated files and settings. Reinstalling updates intact older copies;
+edited workmux content is a conflict and must be reconciled manually. Symlinked
+configuration directories are supported, but managed files cannot be symlinks.
 
-If another integration already sends notifications, disable it before enabling
-this one to avoid duplicates. Workmux deliberately leaves other integrations alone.
+For Codex, unrelated hook edits and JSON reformatting do not prevent updates.
+Invalid or ambiguous JSON and edited workmux groups are left untouched. Uninstall
+removes verified workmux groups, deleting `hooks.json` only if nothing else remains.
+Remove manually added duplicate workmux hooks before installing; they are not
+adopted automatically.
 
-## Runtime and layout limits
+Disable other notification integrations yourself if they would cause duplicates.
 
-- Sidebars are replicated per window and poll their displayed state every 400 ms.
-  Sidebar focus restoration uses tmux events, not that polling interval.
-- The tab bar is tmux's status line, at the user's configured position, spanning
-  the whole terminal width. Workmux does not impose a theme on existing sessions.
-- Sidebars have one blank row at the top and no title. They default to 36 columns
-  and shrink in narrow windows; use at least 40 columns. Set the preferred width
-  globally in tmux configuration with `set-option -g @workmux-sidebar-width 30`,
-  or change it at runtime with `tmux set-option -g @workmux-sidebar-width 30`.
-  Existing sidebars adopt runtime changes automatically. Dragging a sidebar border
-  does not change the preferred width; it snaps back on the next refresh.
-  Workmux always reserves at least 20 columns for content and uses
-  at least 4 columns for the sidebar.
-- Layouts require at least two cells per pane dimension. Impossible layouts fail
-  instead of being applied.
-- Raw tmux commands bypass binding adaptations. Run enable again to add sidebars
-  to manually created windows or replace a closed sidebar.
-- Detaching preserves state. Killing the server loses sessions and workmux's
-  in-memory metadata; disk persistence/session restoration is not implemented.
-- Bound helper commands invoke `workmux` through the server's PATH. Reinstalls do
-  not require new binding paths. Already running sidebar processes retain their
-  previous code and internally pinned Python environment.
+## Advanced tmux configuration
 
-If the server started without the appropriate application bin directory:
+The [commented config example](#optional-tmux-configuration) collects the settings
+below in one place.
+
+### Activation keybinding
+
+The example binds prefix, Shift+w to enable the current session. Explicit socket,
+pane, and client arguments identify the invoking session. `--client` shows a short
+status message; run `workmux enable` in a shell for detailed warnings.
+
+### Automatic activation
+
+The `after-new-session` hook covers each newly created session, including the
+first when the server starts. It does not activate existing sessions. Choose an
+unused hook index and ensure workmux is on the server's `PATH`.
+
+### After reloading your tmux config
+
+Run `workmux enable` again, or use your activation binding. It adapts changed
+supported bindings while leaving unsupported replacements and removed keys alone.
+Existing sidebars and focus hooks are not duplicated; edited or removed workmux
+focus hooks are respected. If plugins change bindings or add focus hooks after
+activation, re-enable once they finish. Workmux does not reload your config.
+
+### Binding support
+
+Only bindings containing a single direct command are adapted:
+
+| Native command | Supported arguments |
+| --- | --- |
+| `new-window` / `neww` | `-d`, `-n`, `-c`, optional shell command |
+| `split-window` / `splitw` | `-b`, `-d`, `-h`, `-v`, `-c`, `-l`, `-p`, optional shell command |
+| `select-layout` / `selectl` | Named standard layout, no argument, `-E`, `-n`, or `-p` |
+| `next-layout` / `nextl` | No arguments |
+| `previous-layout` / `prevl` | No arguments |
+
+Directory and name formats use the invoking content pane. Detached creation,
+pane sizing, shell commands, key tables, repeat flags, and notes are preserved.
+
+Explicit targets (`-t`), full-window splits (`-f`), zoom flags (`-Z`), custom or
+abbreviated layouts, `select-layout -o`, and compound or quoted command bodies
+are not adapted. Unsupported direct bindings produce warnings and stay unchanged.
+Unparseable `list-keys` output is skipped, including whitespace-containing table
+names on tmux 3.6a.
+
+Commands nested in menus, scripts, conditionals, and templates are not rewritten
+or warned about. Plugin-created direct bindings are supported once loaded, but
+commands invoked inside plugins are not intercepted. Raw tmux commands can move
+the sidebar; apply a workmux layout to repair it, or re-enable to add missing
+sidebars. Stock tmux bindings enable without adaptation warnings.
+
+### Navigation bindings
+
+The optional prefix bindings use Up/Down for sessions, Left/Right for tabs, and
+s for sidebar focus. Previous/next session navigation includes sessions not
+enabled in workmux. Workspace order follows session names; there is no custom
+reordering UI.
+
+### Window status indicators
+
+To show activity beside tab names, uncomment both window formats in the config
+example and adapt them to your styling. The guard leaves other sessions with the
+usual index, name, and flags; `enable` does not install these formats.
+The `@workmux-agent-indicator` window option contains a plain activity symbol,
+without colors or Git status, and is empty when idle. It uses the sidebar's
+priority and alert-clearing rules without changing window names.
+
+At least one sidebar must be running on the server. Working indicators animate
+at eight frames per second without changing `status-interval`, even when zero.
+
+## Limits and customization
+
+- The tab bar is tmux's status line, spanning the terminal at your configured
+  position. Sidebars refresh activity about every 400 ms.
+- Layouts require at least two cells per pane dimension. Impossible layouts leave
+  the previous layout unchanged.
+- Detaching preserves state. Killing the server loses sessions and workmux state;
+  restoring them from disk is not supported.
+
+Sidebars default to 36 columns and shrink in narrow windows; use a terminal at
+least 40 columns wide. To change the preferred width at runtime:
+
+```sh
+tmux set-option -g @workmux-sidebar-width 30
+```
+
+Or put `set-option -g @workmux-sidebar-width 30` in your tmux config. Sidebars
+adopt changes automatically. Dragging the border does not set a new preference;
+it snaps back on refresh. Workmux reserves at least 20 columns for content and
+four for the sidebar.
+
+## Upgrading and troubleshooting
+
+Bindings find `workmux` through tmux's `PATH`, but running sidebars keep their old
+code and Python environment. After upgrading, use the **updated installation**
+to restart workmux sidebars on the current server:
+
+```sh
+workmux sidebar reload
+# Outside tmux, select the server if it is not named workmux:
+workmux --socket /path/to/tmux.sock sidebar reload
+```
+
+Reload preserves pane IDs, layout, focus, zoom, and content processes, but resets
+sidebar selection and caches. It needs no attached client or source pane. Missing
+sidebars are not recreated; use `workmux enable` for that. Reload does not reload
+tmux config, reconcile bindings, or reload agent integrations.
+
+Keep the old Python environment until its sidebars have been reloaded. Nix users
+may also need fresh content shells if old store paths shadow the updated command.
+If tmux cannot find the installed command, check its `PATH` from inside the session:
 
 ```sh
 tmux show-environment -g PATH
 tmux set-environment -g PATH "$PATH"
 ```
-
-Do not remove an old Python environment while a sidebar process still uses it.
-After upgrading, run the **updated installation** of workmux to reload every owned
-sidebar on the current tmux server:
-
-```sh
-workmux sidebar reload
-# From outside tmux, select your server explicitly if it is not named workmux:
-workmux --socket /path/to/tmux.sock sidebar reload
-```
-
-Reload works without an attached client or source pane. It restarts only sidebars
-in managed workspaces, keeping pane IDs, layout, focus, zoom, and content processes
-intact. It uses the invoking installation's Python environment rather than the old
-sidebar startup command. Sidebar navigation state and background caches reset.
-Missing sidebars are not recreated; use `workmux enable` for that. Reload does not
-reload tmux configuration, reconcile bindings, or reload agent integrations.
 
 ## References
 

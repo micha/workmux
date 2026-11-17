@@ -125,7 +125,10 @@ python3 -m pip install -e .
   the extension. Node is not a workmux runtime dependency.
 - Optional native harness tests use temporary HOME/config/data/cache directories
   and make no model calls. Validate plugin discovery, schemas, and native hook
-  trust without approving hooks or changing real harness settings.
+  trust without approving hooks or changing real harness settings. Discovery and
+  schema checks have been exercised with OpenCode 1.18.34, Codex 0.146.0, and
+  Claude Code 2.1.223 on Linux. Tests cover event payloads and private tmux state
+  reporting; model-backed end-to-end sessions have not been validated.
 - Integration coverage has been exercised with tmux 3.6a and 3.8 on Linux; the
   pinned flake has been built and tested on `aarch64-linux`. Do not imply other
   tmux versions, platforms, or terminal notification implementations have been
