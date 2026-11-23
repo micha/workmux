@@ -50,6 +50,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         # Native content shells must not read the developer's startup files.
         environment = patch.dict(os.environ, HOME=self.temporary.name,
                                  XDG_CONFIG_HOME=str(Path(self.temporary.name) / ".config"),
+                                 XDG_RUNTIME_DIR=self.temporary.name,
                                  ENV=os.devnull, BASH_ENV=os.devnull, PS1="$ ")
         environment.start()
         self.addCleanup(environment.stop)

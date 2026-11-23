@@ -28,7 +28,9 @@ with tempfile.TemporaryDirectory(prefix="workmux-environment-") as temporary:
         f"exec {shlex.quote(sleep)} 600\n"
     )
     content_shell.chmod(0o755)
-    env = {"HOME": temporary, "PATH": path, "SHELL": str(content_shell),
+    runtime = root / "runtime"
+    runtime.mkdir(mode=0o700)
+    env = {"HOME": temporary, "PATH": path, "SHELL": str(content_shell), "XDG_RUNTIME_DIR": str(runtime),
            "TERM": "xterm-256color", "LC_ALL": "C.UTF-8"}
     socket = str(root / "tmux.socket")
 

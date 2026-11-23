@@ -17,8 +17,7 @@ def working_indicator(now: float) -> str:
 class WindowIndicators:
     """Only the oldest live owned sidebar publishes, with automatic failover.
 
-    All sidebars already snapshot the server for their activity trees. Reusing
-    that snapshot elects one publisher without locks, leases, or a new daemon.
+    The shared activity snapshot elects the publisher without a separate poll.
     Static states write only on change; working windows share one batch/frame.
     """
 
@@ -31,6 +30,10 @@ class WindowIndicators:
         self.values = dict(snapshot.indicators) if snapshot.publisher == self.pane_id else {}
         self.states = {(tab.session, tab.id): tab.state for tab in snapshot.tabs
                        if (tab.session, tab.id) in self.values}
+
+    @property
+    def animating(self) -> bool:
+        return "working" in self.states.values()
 
     def publish(self, tmux: Tmux, now: float) -> None:
         desired = {key: working_indicator(now) if self.states.get(key) == "working"

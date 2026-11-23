@@ -2,14 +2,15 @@
 
 import curses
 from dataclasses import dataclass
+from math import ceil, floor
 from pathlib import Path
 import re
 import time
 import unicodedata
 
-from .checkouts import CheckoutCache
 from .core import Tab, Tmux, WorkmuxError, Workspace
-from .git_status import GitStatus, GitStatusCache
+from .git_status import GitStatus
+from .sidebar_state import SidebarState
 from .status import ANIMATION_INTERVAL, BRAILLE_WHEEL, INDICATORS, WindowIndicators, working_indicator
 
 
@@ -191,13 +192,11 @@ def draw_row(screen, position: int, marker: str, row: SidebarRow, attribute: int
 
 
 def run_sidebar(tmux: Tmux, pane_id: str) -> None:
-    git_status = GitStatusCache()
-    checkout_cache = CheckoutCache()
+    state = SidebarState(tmux)
     indicators = WindowIndicators(pane_id)
 
     def loop(screen):
         screen.keypad(True)
-        screen.timeout(round(ANIMATION_INTERVAL * 1000))
         try:
             curses.curs_set(0)
         except curses.error:
@@ -211,72 +210,104 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
         follow_selection = True
         message = ""
         pane = None
+        snapshot = row_inputs = None
         rows = []
-        next_snapshot = 0.0
+        keys = []
+        indexes = {}
+        displayed = None
+        pane_error = snapshot_error = ""
+        next_pane = next_snapshot = 0.0
         while True:
             now = time.monotonic()
-            if now >= next_snapshot:
+            previous_pane = pane
+            rows_changed = False
+            if now >= next_pane:
                 try:
                     pane = tmux.repair_width(pane_id)
-                    if pane.sidebar and tmux.run("display-message", "-p", "-t", pane_id, "#{window_panes}") == "1":
+                    if pane.sidebar and pane.window_panes == 1:
                         tmux.close_empty_window(pane)
-                    workspaces = tmux.workspaces()
-                    checkouts = checkout_cache.snapshot(workspaces)
-                    directories = tuple({directory for paths in checkouts.values() for directory in paths})
-                    windows = tmux.checkout_tabs() if directories else {}
-                    activity = tmux.activity_snapshot()
-                    indicators.update(activity)
-                    rows = sidebar_rows(workspaces, activity.tabs,
-                                        git_status.snapshot(workspaces, directories), checkouts, windows)
+                    pane_error = ""
                 except WorkmuxError as error:
+                    pane_error = str(error)
+                next_pane = time.monotonic() + SNAPSHOT_INTERVAL
+            if now >= next_snapshot:
+                try:
+                    updated = state.snapshot()
+                    if updated is not snapshot:
+                        snapshot = updated
+                        indicators.update(snapshot.activity)
+                        inputs = (snapshot.workspaces, snapshot.activity.tabs, snapshot.git_states,
+                                  snapshot.checkouts, snapshot.checkout_windows)
+                        if inputs != row_inputs:
+                            row_inputs = inputs
+                            new_rows = sidebar_rows(*inputs)
+                            if new_rows != rows:
+                                rows = new_rows
+                                keys = [row.key for row in rows]
+                                indexes = {key: index for index, key in enumerate(keys)}
+                                rows_changed = True
+                    snapshot_error = ""
+                except WorkmuxError as error:
+                    snapshot_error = str(error)
+                next_snapshot = time.monotonic() + SNAPSHOT_INTERVAL
+            now = time.monotonic()
+            deadline = min(next_pane, next_snapshot)
+            height, width = screen.getmaxyx()
+            error = pane_error or snapshot_error
+            if error or pane is None:
+                view = (height, width, error)
+                if view != displayed:
                     screen.erase()
-                    draw_text(screen, 1, str(error))
+                    draw_text(screen, 1, error)
                     screen.refresh()
-                    screen.getch()
-                    continue
-                now = time.monotonic()
-                next_snapshot = now + SNAPSHOT_INTERVAL
-            if pane is None:
+                    displayed = view
+                screen.timeout(max(1, ceil((deadline - now) * 1000)))
+                if screen.getch() == curses.KEY_RESIZE:
+                    displayed = None
+                    next_pane = 0.0
                 continue
             indicators.publish(tmux, now)
 
-            keys = [row.key for row in rows]
-            if selected_key not in keys or not pane.active:
+            if selected_key not in indexes or (not pane.active and (pane != previous_pane or rows_changed)):
                 current = next((row.key for row in rows
                                 if row.session == pane.session and row.window == pane.window
                                 and row.directory is None), (pane.session, pane.window))
                 checkout = next((row.key for row in rows
                                  if row.directory and row.session == pane.session and row.window == pane.window), None)
                 parent = (pane.session, None)
-                new_selection = (current if current in keys else checkout if checkout in keys else
-                                 parent if parent in keys else (keys[0] if keys else None))
+                new_selection = (current if current in indexes else checkout if checkout in indexes else
+                                 parent if parent in indexes else (keys[0] if keys else None))
                 if new_selection != selected_key:
                     follow_selection = True
                 selected_key = new_selection
-            index = keys.index(selected_key) if selected_key in keys else 0
-            height, width = screen.getmaxyx()
+            index = indexes.get(selected_key, 0)
             visible_rows = max(1, height - 4)
             offset = scroll_offset(offset, 0, len(rows), visible_rows)
             if follow_selection:
                 offset = visible_offset(index, offset, visible_rows)
-            screen.erase()
-            for position, row in enumerate(rows[offset:offset + visible_rows]):
-                current = row.session == pane.session and (
-                    (row.window is None and row.directory is None) or row.window == pane.window)
-                marker = "›" if current and row.window is None and row.directory is None else " "
-                attribute = curses.A_REVERSE if pane.active and row.key == selected_key else 0
-                if row.session != pane.session:
-                    attribute |= curses.A_DIM
-                elif current or row.state in ("attention", "alert"):
-                    attribute |= curses.A_BOLD
-                draw_row(screen, position + 1, marker, row, attribute, colors, working_indicator(now))
-            draw_text(screen, height - 2, message or "Enter: select  q: back", curses.A_DIM)
-            screen.refresh()
+            visible = rows[offset:offset + visible_rows]
+            working_frame = working_indicator(now) if any(row.state == "working" for row in visible) else None
+            highlight = selected_key if pane.active else None
+            view = (height, width, pane.session, pane.window, highlight, message, visible, working_frame)
+            if view != displayed:
+                screen.erase()
+                for position, row in enumerate(visible):
+                    current = row.session == pane.session and (
+                        (row.window is None and row.directory is None) or row.window == pane.window)
+                    marker = "›" if current and row.window is None and row.directory is None else " "
+                    attribute = curses.A_REVERSE if row.key == highlight else 0
+                    if row.session != pane.session:
+                        attribute |= curses.A_DIM
+                    elif current or row.state in ("attention", "alert"):
+                        attribute |= curses.A_BOLD
+                    draw_row(screen, position + 1, marker, row, attribute, colors, working_frame)
+                draw_text(screen, height - 2, message or "Enter: select  q: back", curses.A_DIM)
+                screen.refresh()
+                displayed = view
+            if working_frame is not None or indicators.animating:
+                deadline = min(deadline, (floor(now / ANIMATION_INTERVAL) + 1) * ANIMATION_INTERVAL)
+            screen.timeout(max(1, ceil((deadline - time.monotonic()) * 1000)))
             key = screen.getch()
-            if key != -1:
-                # Refresh focus before the next queued key without polling on
-                # animation-only timeouts.
-                next_snapshot = 0.0
             destination = None
             if key in (curses.KEY_UP, ord("k")) and keys:
                 selected_key = keys[(index - 1) % len(keys)]
@@ -284,6 +315,9 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
             elif key in (curses.KEY_DOWN, ord("j")) and keys:
                 selected_key = keys[(index + 1) % len(keys)]
                 follow_selection = True
+            elif key == curses.KEY_RESIZE:
+                displayed = None
+                next_pane = 0.0
             elif key in (10, 13, curses.KEY_ENTER) and rows:
                 destination = rows[index]
                 follow_selection = True
@@ -316,16 +350,19 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                         else:
                             tmux.select_tab(destination.session, destination.window, pane_id)
                     message = ""
-                    next_snapshot = 0.0
-                elif key in (27, ord("q")) and pane.active:
-                    tmux.toggle_sidebar(pane_id)
-                    next_snapshot = 0.0
+                    next_pane = 0.0
+                elif key in (27, ord("q")):
+                    # Input may arrive immediately after focus enters the sidebar,
+                    # before the scheduled local pane snapshot has observed it.
+                    focused = tmux.pane(pane_id)
+                    if focused.sidebar and focused.active:
+                        tmux.toggle_sidebar(pane_id)
+                        next_pane = 0.0
             except WorkmuxError as error:
                 message = str(error)
-                next_snapshot = 0.0
+                next_pane = 0.0
 
     try:
         curses.wrapper(loop)
     finally:
-        git_status.close()
-        checkout_cache.close()
+        state.close()

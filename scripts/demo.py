@@ -49,6 +49,7 @@ def main() -> None:
         home.mkdir()
         # Neither the demo shells nor Git read personal configuration.
         os.environ.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"),
+                          XDG_RUNTIME_DIR=str(base),
                           XDG_CACHE_HOME=str(home / ".cache"), XDG_DATA_HOME=str(home / ".local/share"),
                           GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
                           SHELL=shutil.which("bash"), TERM="xterm-256color")

@@ -175,6 +175,30 @@ class CheckoutRepositoryTests(unittest.TestCase):
         self.assertEqual(discover_checkouts(str(checkout), 3), (str(linked),))
         self.assertEqual(discover_checkouts(str(checkout), 4), tuple(sorted((str(linked), str(nested)))))
 
+    def test_linked_worktrees_share_one_listing_and_do_not_hide_nested_repos(self):
+        from workmux.checkouts import _git
+
+        main = self.repo(self.job / 'repo')
+        trees = main / 'trees'
+        trees.mkdir()
+        linked = [trees / f'tree-{i}' for i in range(3)]
+        for path in linked:
+            self.git(main, 'worktree', 'add', '--detach', str(path))
+        nested = self.repo(linked[0] / 'nested')
+        # Start inside the main checkout so its --git-common-dir is relative,
+        # while the same option in a linked worktree normally prints an absolute path.
+        with patch('workmux.checkouts._git', wraps=_git) as probe:
+            self.assertEqual(discover_checkouts(str(trees)), tuple(sorted(map(str, [*linked, nested]))))
+        listings = [call.args[0] for call in probe.call_args_list
+                    if call.args[1:3] == ('worktree', 'list')]
+        self.assertEqual(listings, [str(trees), str(nested)])
+
+    def test_disabled_discovery_skips_git_and_walk(self):
+        with patch('workmux.checkouts._git') as probe, patch('workmux.checkouts.os.scandir') as scan:
+            self.assertEqual(discover_checkouts(str(self.job), 0), ())
+        probe.assert_not_called()
+        scan.assert_not_called()
+
     def test_registered_worktrees_obey_depth_limit(self):
         checkout = self.repo(self.job / 'repo')
         linked = checkout / 'trees' / 'feature'

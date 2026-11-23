@@ -288,9 +288,12 @@ folders and unavailable or failed checks show no symbol. Colors fall back to
 plain symbols on terminals without color support.
 
 Checks run in the background, normally every two seconds, without fetching or
-refreshing Git's index on disk. Ahead/behind compares against the locally known
-upstream, so it may be stale until you fetch. Slow checks time out and do not
-block sidebar navigation.
+refreshing Git's index on disk. Sidebars on the same tmux server share checkout
+discovery and Git status results. If the sidebar doing the checks closes, Git
+indicators and checkout rows may briefly disappear while another sidebar
+refreshes them. Ahead/behind compares against the locally known upstream, so it
+may be stale until you fetch. Slow checks time out and do not block sidebar
+navigation.
 
 ### Activity tree
 

@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from workmux.cli import attach, main, resolve_workspace
-from workmux.core import (Tmux, WorkmuxError, Workspace, sidebar_width, tmux_argument,
+from workmux.core import (Pane, Tmux, WorkmuxError, Workspace, sidebar_width, tmux_argument,
                           validate_directory, validate_label)
 from workmux.sidebar import visible_offset
 
@@ -125,8 +125,8 @@ class InputTests(unittest.TestCase):
             self.assertIn('run-shell -b "workmux --server workmux ', output)
 
     def test_panes_are_read_in_one_snapshot_without_individual_id_lookups(self):
-        output = ("%1\t$0\t@0\t1\t0\t24\t120\t0\t/tmp\t28\n"
-                  "%2\t$0\t@0\t\t1\t95\t120\t0\t/tmp\t28")
+        output = ("%1\t$0\t@0\t1\t0\t24\t120\t0\t/tmp\t28\t2\n"
+                  "%2\t$0\t@0\t\t1\t95\t120\t0\t/tmp\t28\t2")
         tmux = Tmux()
         with patch.object(tmux, "run", return_value=output) as run:
             panes = tmux.panes("@0")
@@ -134,7 +134,27 @@ class InputTests(unittest.TestCase):
         self.assertTrue(panes[0].sidebar)
         self.assertTrue(panes[1].active)
         self.assertEqual(panes[0].preferred_sidebar_width, 28)
+        self.assertEqual(panes[0].window_panes, 2)
         run.assert_called_once_with("list-panes", "-t", "@0", "-F", tmux._pane_format())
+
+    def test_width_repair_already_knows_when_sidebar_is_the_only_pane(self):
+        tmux = Tmux()
+        output = "%1\t$0\t@0\t1\t1\t120\t120\t0\t/tmp\t\t1"
+        with patch.object(tmux, "run", return_value=output) as run:
+            pane = tmux.repair_width("%1")
+        self.assertEqual((pane.width, pane.window_panes), (120, 1))
+        run.assert_called_once_with("display-message", "-p", "-t", "%1", tmux._pane_format())
+
+    def test_selecting_an_explicit_agent_pane_skips_the_global_activity_scan(self):
+        tmux = Tmux()
+        sidebar = Pane('%0', '$0', '@0', True, True, 36, 120, False, '/tmp')
+        content = Pane('%1', '$0', '@0', False, False, 83, 120, False, '/tmp')
+        with patch.object(tmux, 'require_workspace'), patch.object(tmux, 'pane', return_value=sidebar), \
+                patch.object(tmux, 'panes', return_value=[sidebar, content]), \
+                patch.object(tmux, 'attention_tabs') as activity, patch.object(tmux, 'run') as run:
+            tmux.select_tab('$0', '@0', '%0', 'client', destination_pane='%1')
+        activity.assert_not_called()
+        run.assert_any_call('select-pane', '-t', '%1')
 
     def test_workspace_resolution_by_id_name_or_label(self):
         with patch.object(Tmux, "workspaces", return_value=[

@@ -27,7 +27,12 @@
 - `workmux/core.py`: tmux operations, sidebar/layout helpers, and internal defaults
   for the optional isolated-server workflow.
 - `workmux/layouts.py`: pure geometry and portable tmux layout serialization.
-- `workmux/sidebar.py`: terminal rendering and workspace navigation.
+- `workmux/sidebar.py`: terminal rendering and workspace navigation. Keep cursor
+  movement and scrolling local; refresh pane geometry/focus on a separate cadence
+  and validate current tmux targets when activating a row.
+- `workmux/sidebar_state.py`: share server-wide workspace, checkout, Git status,
+  and activity snapshots across sidebars on the same tmux server. Background
+  cache staleness must not prevent local geometry repair or empty-tab cleanup.
 - `workmux/status.py`: shared activity symbols and plain animated window-status
   publication. Elect one live owned sidebar from the activity snapshot; batch
   changed window options without changing status formats or refresh intervals.

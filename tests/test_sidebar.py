@@ -2,7 +2,7 @@
 
 from contextlib import ExitStack
 import curses
-import itertools
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -64,16 +64,18 @@ class _StopLoop(Exception):
 
 class SidebarLoopTests(unittest.TestCase):
     def run_loop(self, actions, mouse_events=(), active=True, tabs=(), checkouts=None, windows=None,
-                 markers=None):
-        """Each action runs after a rendered frame; callable actions can resize."""
+                 markers=None, step=1.0):
+        """Advance a fake input clock; callable actions can resize or change tmux state."""
         tmux = Mock()
         tmux.repair_width.return_value = Pane("%0", "$0", "@0", True, active,
                                              36, 120, False, "/tmp")
-        tmux.run.return_value = "2"
+        tmux.pane.side_effect = lambda _: tmux.repair_width.return_value
         tmux.workspaces.return_value = [Workspace(f"${index}", f"repo-{index}", "", "/jobs")
                                         for index in range(20)]
-        tmux.activity_snapshot.return_value = ActivitySnapshot(list(tabs), None, {})
-        tmux.checkout_tabs.return_value = windows or {}
+        tmux.sidebar_snapshot.side_effect = lambda: SimpleNamespace(
+            workspaces=tmux.workspaces.return_value, activity=ActivitySnapshot(list(tabs), None, {}),
+            checkout_windows=windows or {}, checkouts=checkouts or {}, git_states={},
+        )
         screen = Mock()
         screen.getmaxyx.return_value = (10, 36)  # Six tree rows.
         frames = []
@@ -81,12 +83,15 @@ class SidebarLoopTests(unittest.TestCase):
         screen.erase.side_effect = drawn.clear
         screen.refresh.side_effect = lambda: frames.append(list(drawn))
         actions = iter(actions)
+        now = 0.0
 
         def getch():
+            nonlocal now
             try:
                 action = next(actions)
             except StopIteration:
                 raise _StopLoop
+            now += step
             return action(screen, tmux) if callable(action) else action
 
         screen.getch.side_effect = getch
@@ -104,16 +109,13 @@ class SidebarLoopTests(unittest.TestCase):
             stack.enter_context(patch("workmux.sidebar.curses.BUTTON4_PRESSED", 64, create=True))
             stack.enter_context(patch("workmux.sidebar.curses.BUTTON5_PRESSED", 128, create=True))
             stack.enter_context(patch("workmux.sidebar.status_attributes", return_value={}))
-            stack.enter_context(patch("workmux.sidebar.time.monotonic", side_effect=itertools.count()))
+            stack.enter_context(patch("workmux.sidebar.time.monotonic", side_effect=lambda: now))
             stack.enter_context(patch("workmux.sidebar.draw_row", side_effect=draw))
-            cache = stack.enter_context(patch("workmux.sidebar.GitStatusCache"))
-            cache.return_value.snapshot.return_value = {}
-            discovery = stack.enter_context(patch("workmux.sidebar.CheckoutCache"))
-            discovery.return_value.snapshot.return_value = checkouts or {}
+            state = stack.enter_context(patch("workmux.sidebar.SidebarState")).return_value
+            state.snapshot.side_effect = tmux.sidebar_snapshot
             with self.assertRaises(_StopLoop):
                 run_sidebar(tmux, "%0")
-            cache.return_value.close.assert_called_once()
-            discovery.return_value.close.assert_called_once()
+            state.close.assert_called_once()
             self.assertTrue(mousemask.call_args.args[0] & 64)
             self.assertTrue(mousemask.call_args.args[0] & 128)
         return frames, tmux
@@ -145,8 +147,7 @@ class SidebarLoopTests(unittest.TestCase):
             with self.subTest(active=active):
                 frames, tmux = self.run_loop([curses.KEY_MOUSE, -1, -1],
                                              [(0, 2, 2, 0, 128)], active=active)
-                self.assertEqual([frame[0][0] for frame in frames],
-                                 [("$0", None), ("$3", None), ("$3", None), ("$3", None)])
+                self.assertEqual([frame[0][0] for frame in frames], [("$0", None), ("$3", None)])
                 tmux.select_workspace.assert_not_called()
                 tmux.select_tab.assert_not_called()
                 tmux.toggle_sidebar.assert_not_called()
@@ -203,7 +204,35 @@ class SidebarLoopTests(unittest.TestCase):
                                   [(0, 2, 2, 0, button) for button in
                                    [128, 128, 128, 128, 128, 128, 64, 64, 64]])
         self.assertEqual([int(frame[0][0][0][1:]) for frame in frames],
-                         [0, 3, 6, 9, 12, 14, 14, 11, 8, 5])
+                         [0, 3, 6, 9, 12, 14, 11, 8, 5])
+
+    def test_key_repeat_does_not_fetch_focus_or_global_state_per_key(self):
+        frames, tmux = self.run_loop([ord('j')] * 50, step=0.001)
+        tmux.repair_width.assert_called_once_with('%0')
+        tmux.sidebar_snapshot.assert_called_once_with()
+        tmux.pane.assert_not_called()
+        self.assertTrue(dict(frames[-1])[('$10', None)] & curses.A_REVERSE)
+
+    def test_q_checks_current_focus_even_before_scheduled_refresh(self):
+        def gained_focus(screen, tmux):
+            tmux.pane.side_effect = None
+            tmux.pane.return_value = Pane('%0', '$0', '@0', True, True, 36, 120, False, '/tmp')
+            return ord('q')
+
+        _, tmux = self.run_loop([gained_focus], active=False, step=0.001)
+        tmux.toggle_sidebar.assert_called_once_with('%0')
+        tmux.sidebar_snapshot.assert_called_once_with()
+
+    def test_idle_redraws_only_when_a_working_row_is_visible(self):
+        keys = [-1] * 5
+        frames, _ = self.run_loop(keys, step=0.1)
+        self.assertEqual(len(frames), 1)
+        visible = Tab('$0', '@0', 0, 'running', 'working')
+        frames, _ = self.run_loop(keys, tabs=[visible], step=0.05)
+        self.assertEqual(len(frames), 3)
+        offscreen = Tab('$19', '@19', 0, 'running', 'working')
+        frames, _ = self.run_loop(keys, tabs=[offscreen], step=0.05)
+        self.assertEqual(len(frames), 1)
 
     def test_resize_and_row_removal_clamp_without_selection_snapback(self):
         def resize(screen, tmux):

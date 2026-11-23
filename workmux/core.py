@@ -82,8 +82,16 @@ def _agent_state(value: str, alive: dict[int, bool]) -> str | None:
 _ACTIVITY_FORMAT = (
     "#{session_id}\t#{window_id}\t#{window_index}\t#{window_flags}\t#{pane_id}"
     "\t#{@workspace-sidebar}\t#{pane_dead}\t#{@workmux-agent}"
-    "\t#{pane_index}\t#{s/[\t\r\n]/ /:pane_title}\t#{window_name}"
+    "\t#{pane_index}\t#{s/[\t\r\n]/ /:pane_title}\t#{s/[\r\n]/ /:window_name}"
 )
+
+
+_WORKSPACE_FORMAT = (
+    "#{session_id}\t#{session_name}\t#{@workspace-label}\t#{@workspace-dir}\t#{@workmux}"
+    "\t#{@workmux-checkout-max-depth}"
+)
+_EXTENDED_ACTIVITY_FORMAT = "#{@workmux}\t#{@workmux-agent-indicator}\t" + _ACTIVITY_FORMAT
+_CHECKOUT_TAB_FORMAT = "#{session_id}\t#{window_id}\t#{@workmux-checkout}"
 
 
 @dataclass(frozen=True)
@@ -91,6 +99,68 @@ class ActivitySnapshot:
     tabs: list[Tab]
     publisher: str | None
     indicators: dict[tuple[str, str], str]
+
+
+@dataclass(frozen=True)
+class SidebarSnapshot:
+    workspaces: list[Workspace]
+    activity: ActivitySnapshot
+    checkout_windows: dict[tuple[str, str], str]
+
+
+def _workspaces(output: str) -> list[Workspace]:
+    result = []
+    for line in output.split("\n"):
+        fields = line.split("\t")
+        if len(fields) == 6 and fields[4] == "1":
+            try:
+                depth = int(fields[5])
+            except ValueError:
+                depth = None
+            if depth is not None and depth < 0:
+                depth = None
+            result.append(Workspace(*fields[:4], checkout_max_depth=depth))
+    return sorted(result, key=lambda workspace: workspace.name)
+
+
+def _checkout_tabs(output: str) -> dict[tuple[str, str], str]:
+    result = {}
+    for line in output.split("\n"):
+        fields = line.split("\t", 2)
+        if len(fields) != 3:
+            continue
+        session, window, value = fields
+        if not value:
+            continue
+        try:
+            path = json.loads(value)
+        except ValueError:
+            continue
+        if isinstance(path, str) and os.path.isabs(path):
+            result.setdefault((session, path), window)
+    return result
+
+
+def _activity_snapshot(output: str) -> ActivitySnapshot:
+    rows = []
+    publishers = set()
+    indicators = {}
+    for line in output.split("\n"):
+        fields = line.split("\t", 2)
+        if len(fields) != 3:
+            continue
+        managed, indicator, row = fields
+        panes = row.split("\t", 10)
+        if len(panes) != 11:
+            continue
+        rows.append(row)
+        if managed == "1":
+            session, window, _, _, pane, sidebar, dead, _, _, _, _ = panes
+            indicators.setdefault((session, window), indicator)
+            if sidebar == "1" and dead != "1":
+                publishers.add(pane)
+    publisher = min(publishers, key=lambda pane: int(pane[1:]), default=None)
+    return ActivitySnapshot(_attention_tabs("\n".join(rows)), publisher, indicators)
 
 
 def _attention_tabs(output: str) -> list[Tab]:
@@ -156,6 +226,7 @@ class Pane:
     zoomed: bool
     directory: str
     preferred_sidebar_width: int = 36
+    window_panes: int = 0
 
 
 def validate_label(label: str) -> str:
@@ -254,24 +325,22 @@ class Tmux:
                            *selector, *args])
 
     def workspaces(self) -> list[Workspace]:
-        output = self.run(
-            "list-sessions", "-F",
-            "#{session_id}\t#{session_name}\t#{@workspace-label}\t#{@workspace-dir}\t#{@workmux}"
-            "\t#{@workmux-checkout-max-depth}",
-            missing_ok=True,
-        )
-        result = []
-        for line in output.splitlines():
-            fields = line.split("\t")
-            if len(fields) == 6 and fields[4] == "1":
-                try:
-                    depth = int(fields[5])
-                except ValueError:
-                    depth = None
-                if depth is not None and depth < 0:
-                    depth = None
-                result.append(Workspace(*fields[:4], checkout_max_depth=depth))
-        return sorted(result, key=lambda workspace: workspace.name)
+        return _workspaces(self.run("list-sessions", "-F", _WORKSPACE_FORMAT, missing_ok=True))
+
+    def sidebar_snapshot(self) -> SidebarSnapshot:
+        """Collect all server-wide sidebar data with one client command queue."""
+        output = self.run("list-sessions", "-F", "S\t" + _WORKSPACE_FORMAT, ";",
+                          "list-panes", "-a", "-F", "P\t" + _EXTENDED_ACTIVITY_FORMAT, ";",
+                          "list-windows", "-a", "-F", "W\t" + _CHECKOUT_TAB_FORMAT,
+                          missing_ok=True)
+        rows = {"S": [], "P": [], "W": []}
+        for line in output.split("\n"):
+            tag, _, row = line.partition("\t")
+            if tag in rows:
+                rows[tag].append(row)
+        return SidebarSnapshot(_workspaces("\n".join(rows["S"])),
+                               _activity_snapshot("\n".join(rows["P"])),
+                               _checkout_tabs("\n".join(rows["W"])))
 
     def report_agent_state(self, target: str, state: str, pid: int | None = None,
                            root: str | list[str] | None = None) -> None:
@@ -306,46 +375,26 @@ class Tmux:
 
     def activity_snapshot(self) -> ActivitySnapshot:
         """Read sidebar activity, publisher election, and window caches together."""
-        output = self.run("list-panes", "-a", "-F",
-                          "#{@workmux}\t#{@workmux-agent-indicator}\t" + _ACTIVITY_FORMAT,
-                          missing_ok=True)
-        rows = []
-        publishers = set()
-        indicators = {}
-        for line in output.split("\n"):
-            fields = line.split("\t", 2)
-            if len(fields) != 3:
-                continue
-            managed, indicator, row = fields
-            panes = row.split("\t", 10)
-            if len(panes) != 11:
-                continue
-            rows.append(row)
-            if managed == "1":
-                session, window, _, _, pane, sidebar, dead, _, _, _, _ = panes
-                indicators.setdefault((session, window), indicator)
-                if sidebar == "1" and dead != "1":
-                    publishers.add(pane)
-        publisher = min(publishers, key=lambda pane: int(pane[1:]), default=None)
-        return ActivitySnapshot(_attention_tabs("\n".join(rows)), publisher, indicators)
+        return _activity_snapshot(self.run("list-panes", "-a", "-F", _EXTENDED_ACTIVITY_FORMAT,
+                                           missing_ok=True))
 
     @staticmethod
     def _pane_format() -> str:
         return ("#{pane_id}\t#{session_id}\t#{window_id}\t#{@workspace-sidebar}\t#{pane_active}"
                 "\t#{pane_width}\t#{window_width}\t#{window_zoomed_flag}\t#{pane_current_path}"
-                "\t#{@workmux-sidebar-width}")
+                "\t#{@workmux-sidebar-width}\t#{window_panes}")
 
     @staticmethod
     def _parse_pane(line: str, target: str) -> Pane:
         fields = line.split("\t")
-        if len(fields) != 10 or not fields[0]:
+        if len(fields) != 11 or not fields[0]:
             raise WorkmuxError(f"Cannot resolve pane: {target}")
         try:
             preferred_width = int(fields[9]) if fields[9] else 36
         except ValueError:
             preferred_width = 36
         return Pane(fields[0], fields[1], fields[2], fields[3] == "1", fields[4] == "1",
-                    int(fields[5]), int(fields[6]), fields[7] == "1", fields[8], preferred_width)
+                    int(fields[5]), int(fields[6]), fields[7] == "1", fields[8], preferred_width, int(fields[10]))
 
     def pane(self, target: str) -> Pane:
         line = self.run("display-message", "-p", "-t", target, self._pane_format())
@@ -484,21 +533,8 @@ class Tmux:
 
     def checkout_tabs(self) -> dict[tuple[str, str], str]:
         """Read explicit window associations in one snapshot, never infer from cwd."""
-        output = self.run("list-windows", "-a", "-F",
-                          "#{session_id}\t#{window_id}\t#{@workmux-checkout}", missing_ok=True)
-        result = {}
-        for line in output.splitlines():
-            fields = line.split("\t", 2)
-            if len(fields) != 3:
-                continue
-            session, window, value = fields
-            try:
-                path = json.loads(value)
-            except ValueError:
-                continue
-            if isinstance(path, str) and os.path.isabs(path):
-                result.setdefault((session, path), window)
-        return result
+        return _checkout_tabs(self.run("list-windows", "-a", "-F", _CHECKOUT_TAB_FORMAT,
+                                       missing_ok=True))
 
     def select_checkout(self, session: str, directory: str, source_pane: str,
                         client: str | None = None) -> None:
@@ -679,9 +715,11 @@ class Tmux:
             if len(clients) != 1:
                 raise WorkmuxError("Tab selection requires exactly one attached client in this session.")
             client = clients[0]
-        preferred = next((tab.pane for tab in self.attention_tabs()
-                          if tab.session == session and tab.id == window), None)
-        preferred = destination_pane or preferred
+        preferred = destination_pane
+        if preferred is None:
+            # Only infer a preferred pane for rows that target the whole window.
+            preferred = next((tab.pane for tab in self.attention_tabs()
+                              if tab.session == session and tab.id == window), None)
         # Select the destination tab before switching sessions, avoiding an unrelated
         # tab being focused (and having its native alerts acknowledged) on the way.
         self.run("select-window", "-t", target)
@@ -696,8 +734,7 @@ class Tmux:
     def repair_width(self, target: str) -> Pane:
         pane = self.pane(target)
         if pane.sidebar and not pane.zoomed:
-            count = self.run("display-message", "-p", "-t", pane.id, "#{window_panes}")
-            if count == "1":
+            if pane.window_panes == 1:
                 return pane  # Empty tabs are closed by the sidebar; never resize a sole pane.
             desired = sidebar_width(pane.window_width, pane.preferred_sidebar_width)
             if pane.width != desired:
