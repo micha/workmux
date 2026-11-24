@@ -11,16 +11,18 @@ import unicodedata
 from .core import Tab, Tmux, WorkmuxError, Workspace
 from .git_status import GitStatus
 from .sidebar_state import SidebarState
-from .status import ANIMATION_INTERVAL, INDICATORS, WindowIndicators, working_indicator
+from .status import INDICATORS, WindowIndicators
 
 
 AGENT_ROW_STATES = ("working", "attention", "finished")
 SNAPSHOT_INTERVAL = 0.4
+HEART_BEAT_SECONDS = 1.0
+HEART_PERIOD_SECONDS = 3.0
 WHEEL_SCROLL_ROWS = 3
 GIT_INDICATORS = {"clean": "✓", "dirty": "●", "ahead": "↑", "behind": "↓",
                   "diverged": "↕", "conflict": "!"}
 STATUS_FOREGROUNDS = {
-    "working": curses.COLOR_BLUE,
+    "working": curses.COLOR_RED,
     "attention": curses.COLOR_RED,
     "finished": curses.COLOR_GREEN,
     "other": curses.COLOR_YELLOW,
@@ -154,19 +156,30 @@ def draw_text(screen, row: int, text: str, attribute: int = 0, *, x: int = 0,
         pass  # Wide window-name glyphs can hit the edge before the character limit.
 
 
+def _heart_pulse(now: float) -> tuple[bool, float]:
+    """Return whether the working heart is dim and when it next changes."""
+    start = floor(now / HEART_PERIOD_SECONDS) * HEART_PERIOD_SECONDS
+    beat_end = start + HEART_BEAT_SECONDS
+    return (True, start + HEART_PERIOD_SECONDS) if now >= beat_end else (False, beat_end)
+
+
 def draw_row(screen, position: int, marker: str, row: SidebarRow, attribute: int,
-             colors: dict[str, int], working_frame: str | None = None) -> None:
-    """Draw a row with undimmed gutter marks and independently colored status symbols."""
+             colors: dict[str, int], *, working_dimmed: bool = False) -> None:
+    """Draw gutter marks with brightness and color independent of workspace dimming."""
     indicator = INDICATORS.get(row.state or "", "")
-    if indicator:
-        marker = (working_frame or indicator) if row.state == "working" else indicator
+    marker = indicator or marker
     text = f"{marker} {row.text}"
     draw_text(screen, position, text, attribute)
     if (row.window is not None or row.directory is not None) and row.text.startswith(("├", "└")):
         draw_text(screen, position, row.text[0], attribute | curses.A_DIM, x=2, max_width=2)
     if indicator or (marker != " " and attribute & curses.A_DIM):
         color = colors.get("other" if row.state == "alert" else row.state, 0) if indicator else 0
-        draw_text(screen, position, marker, (attribute & ~curses.A_DIM) | color, max_width=2)
+        gutter = (attribute & ~curses.A_DIM) | color
+        if row.state == "working":
+            gutter &= ~curses.A_BOLD
+            if working_dimmed:
+                gutter |= curses.A_DIM
+        draw_text(screen, position, marker, gutter, max_width=2)
     if row.git_states:
         # Locate the suffix structurally: session names may contain symbols too.
         suffix = " ".join(GIT_INDICATORS[state] for state in row.git_states)
@@ -257,7 +270,7 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                     displayed = None
                     next_pane = 0.0
                 continue
-            indicators.publish(tmux, now)
+            indicators.publish(tmux)
 
             if selected_key not in indexes or (not pane.active and (pane != previous_pane or rows_changed)):
                 current = next((row.key for row in rows
@@ -277,11 +290,14 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
             if follow_selection:
                 offset = visible_offset(index, offset, visible_rows)
             visible = rows[offset:offset + visible_rows]
-            working_frame = working_indicator(now) if any(row.state == "working" for row in visible) else None
+            working_dimmed = False
+            if any(row.state == "working" for row in visible):
+                working_dimmed, next_beat = _heart_pulse(now)
+                deadline = min(deadline, next_beat)
             highlight = selected_key if pane.active else None
             previous_session = snapshot.previous_sessions.get(pane.session)
             view = (height, width, pane.session, pane.window, previous_session, highlight, message, visible,
-                    working_frame)
+                    working_dimmed)
             if view != displayed:
                 screen.erase()
                 for position, row in enumerate(visible):
@@ -295,12 +311,10 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                         attribute |= curses.A_DIM
                     elif current or row.state in ("attention", "alert"):
                         attribute |= curses.A_BOLD
-                    draw_row(screen, position + 1, marker, row, attribute, colors, working_frame)
+                    draw_row(screen, position + 1, marker, row, attribute, colors, working_dimmed=working_dimmed)
                 draw_text(screen, height - 2, message or "Enter: select  q: back", curses.A_DIM)
                 screen.refresh()
                 displayed = view
-            if working_frame is not None or indicators.animating:
-                deadline = min(deadline, (floor(now / ANIMATION_INTERVAL) + 1) * ANIMATION_INTERVAL)
             screen.timeout(max(1, ceil((deadline - time.monotonic()) * 1000)))
             key = screen.getch()
             destination = None

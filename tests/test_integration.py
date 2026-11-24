@@ -27,7 +27,7 @@ from workmux.layouts import LAYOUTS
 from workmux.pi_reload import reload_panes
 from workmux.plugins import install_plugin
 from workmux.sidebar import sidebar_rows
-from workmux.status import WORKING_FRAMES, WindowIndicators
+from workmux.status import WindowIndicators
 
 
 def eventually(predicate, message="condition was not reached", timeout=8):
@@ -152,7 +152,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.run('select-pane', '-t', agent, '-T', 'worktree-agent')
         self.tmux.report_agent_state(content.id, 'working', os.getpid(), str(workspace))
         self.tmux.report_agent_state(agent, 'working', os.getpid(), str(linked))
-        eventually(lambda: any(frame + ' └ ✦' in capture() for frame in WORKING_FRAMES)
+        eventually(lambda: '♥ └ ✦' in capture()
                    and 'worktree-agent' in capture() and 'workspace-agent' in capture())
         rows = sidebar_rows(self.tmux.workspaces(), self.tmux.attention_tabs(),
                             checkouts={session: (str(linked),)})
@@ -203,12 +203,11 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertEqual(len(self.tmux.run('list-windows', '-t', session).splitlines()), 2)
         self.tmux.report_agent_state(content.id, 'working', os.getpid(), str(linked))
         self.tmux.select_tab(session, original.window, content.id)
-        eventually(lambda: any(frame + ' └ ✦' in capture() for frame in WORKING_FRAMES),
-                   'agent tab was not a direct workspace child')
+        eventually(lambda: '♥ └ ✦' in capture(), 'agent tab was not a direct workspace child')
         git('worktree', 'remove', '--force', str(linked))
         eventually(lambda: "⎇ api ' $;" not in capture(), 'removed checkout remained listed', timeout=12)
         self.assertEqual(self.tmux.pane(content.id).window, content.window)
-        self.assertTrue(pane_contains_any(self.tmux, sidebar.id, WORKING_FRAMES))
+        self.assertTrue(pane_contains_any(self.tmux, sidebar.id, ('♥',)))
         with self.assertRaises(WorkmuxError):
             self.tmux.select_checkout(session, str(linked), original.id)
         self.assertEqual(len(self.tmux.run('list-windows', '-t', session).splitlines()), 2)
@@ -1663,8 +1662,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         current = self.tmux.new_tab(pane, "current")
         sidebar = next(item for item in self.tmux.panes(self.tmux.pane(current).window) if item.sidebar)
         self.attach(session)
-        for state, indicators in (("working", WORKING_FRAMES), ("attention", ("⚠",)),
-                                  ("finished", ("✓",))):
+        for state, indicators in (("working", ("♥",)), ("attention", ("⚠",)), ("finished", ("✓",))):
             self.tmux.report_agent_state(pane, state, os.getpid())
             if state != "working":
                 self.tmux.run("send-keys", "-t", pane, "printf '\\a'", "Enter")
@@ -1681,7 +1679,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkmuxError, "sidebar"):
             self.tmux.report_agent_state(sidebar.id, "working")
 
-    def test_window_status_prefix_animates_with_existing_formats_and_zero_interval(self):
+    def test_window_status_prefix_shows_heart_with_existing_formats_and_zero_interval(self):
         session, pane = self.native_session()
         status_format = (' #{?#{&&:#{==:#{@workmux},1},#{@workmux-agent-indicator}},'
                          '#{@workmux-agent-indicator} ,}#I:#W#F ')
@@ -1698,16 +1696,16 @@ class TmuxIntegrationTests(unittest.TestCase):
                       "@workmux-agent-indicator", "leave-me")
         output = bytearray()
         self.attach(session, output=output)
-        # Hide the sidebar animation to isolate status-line updates.
+        # Hide the sidebar to isolate status-line updates.
         self.tmux.run("resize-pane", "-Z", "-t", current)
         self.tmux.report_agent_state(pane, "working", os.getpid())
         self.tmux.report_agent_state(current, "working", os.getpid())
-        eventually(lambda: len({glyph for glyph in WORKING_FRAMES if glyph.encode() in output}) >= 2,
-                   "status line did not advance with status-interval zero")
+        eventually(lambda: output.count("♥".encode()) >= 2,
+                   "status line did not show both hearts with status-interval zero")
         for target in (pane, current):
             for option in ("window-status-format", "window-status-current-format"):
                 rendered = self.tmux.run("display-message", "-p", "-t", target, "#{E:" + option + "}")
-                self.assertIn(rendered.split()[0], WORKING_FRAMES, repr(rendered))
+                self.assertEqual(rendered.split()[0], "♥", repr(rendered))
         self.tmux.run("rename-window", "-t", original.window, "renamed ; literal")
         self.tmux.run("move-window", "-s", original.window, "-t", session + ":9")
         eventually(lambda: self.tmux.run("display-message", "-p", "-t", pane,
@@ -1738,11 +1736,11 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.report_agent_state(content.id, "finished", os.getpid())
         eventually(lambda: indicator() == "✓")
         self.tmux.report_agent_state(working, "working", os.getpid())
-        eventually(lambda: indicator() in WORKING_FRAMES)
+        eventually(lambda: indicator() == "♥")
         self.tmux.report_agent_state(attention, "attention", os.getpid())
         eventually(lambda: indicator() == "⚠")
         self.tmux.run("select-window", "-t", content.window)
-        eventually(lambda: indicator() in WORKING_FRAMES)
+        eventually(lambda: indicator() == "♥")
         self.assertEqual(self.tmux.run("display-message", "-p", "-t", content.id,
                                        "#{window_bell_flag}"), "0")
         self.tmux.report_agent_state(working, "idle")
@@ -1754,13 +1752,13 @@ class TmuxIntegrationTests(unittest.TestCase):
         process = subprocess.Popen(["sleep", "30"])
         try:
             self.tmux.report_agent_state(working, "working", process.pid)
-            eventually(lambda: indicator() in WORKING_FRAMES)
+            eventually(lambda: indicator() == "♥")
         finally:
             process.terminate()
             process.wait(timeout=3)
         eventually(lambda: indicator() == "")
         self.tmux.report_agent_state(working, "working", os.getpid())
-        eventually(lambda: indicator() in WORKING_FRAMES)
+        eventually(lambda: indicator() == "♥")
         self.tmux.run("set-option", "-w", "-t", content.window, "remain-on-exit", "on")
         self.tmux.run("respawn-pane", "-k", "-t", working, "exit 0")
         eventually(lambda: self.tmux.run("display-message", "-p", "-t", working, "#{pane_dead}") == "1")
@@ -1778,7 +1776,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.report_agent_state(other.id, "working", os.getpid())
         indicator = lambda: self.tmux.run("display-message", "-p", "-t", other.id,
                                           "#{@workmux-agent-indicator}")
-        eventually(lambda: indicator() in WORKING_FRAMES)
+        eventually(lambda: indicator() == "♥")
         self.assertEqual(self.tmux.activity_snapshot().publisher, leader.id)
         self.tmux.run("set-option", "-w", "-t", content.window, "remain-on-exit", "on")
         self.tmux.run("respawn-pane", "-k", "-t", leader.id, "exit 0")
@@ -1787,7 +1785,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.report_agent_state(other.id, "idle")
         eventually(lambda: indicator() == "", "new publisher did not clear the indicator")
         self.tmux.report_agent_state(other.id, "working", os.getpid())
-        eventually(lambda: indicator() in WORKING_FRAMES, "new publisher did not update the indicator")
+        eventually(lambda: indicator() == "♥", "new publisher did not update the indicator")
         self.assertEqual(self.tmux.reload_sidebars(), 2)
         eventually(lambda: self.tmux.activity_snapshot().publisher == leader.id)
         self.tmux.report_agent_state(other.id, "idle")
@@ -1806,19 +1804,19 @@ class TmuxIntegrationTests(unittest.TestCase):
         indicators = WindowIndicators(leader.id)
         indicators.update(self.tmux.activity_snapshot())
         self.tmux.run("set-option", "-t", second, "@workmux", "0")
-        indicators.publish(self.tmux, 0)
+        indicators.publish(self.tmux)
         self.assertEqual(self.tmux.run("show-options", "-wqv", "-t", other.window,
                                        "@workmux-agent-indicator"), "untouched")
         self.tmux.run("set-option", "-t", second, "@workmux", "1")
         indicators.update(self.tmux.activity_snapshot())
         self.tmux.run("set-option", "-p", "-t", leader.id, "@workspace-sidebar", "0")
-        indicators.publish(self.tmux, 0)
+        indicators.publish(self.tmux)
         self.assertEqual(self.tmux.run("show-options", "-wqv", "-t", other.window,
                                        "@workmux-agent-indicator"), "untouched")
         self.tmux.run("set-option", "-p", "-t", leader.id, "@workspace-sidebar", "1")
         indicators.update(self.tmux.activity_snapshot())
         self.tmux.run("kill-window", "-t", other.window)
-        indicators.publish(self.tmux, 0)  # Missing target is best-effort decoration.
+        indicators.publish(self.tmux)  # Missing target is best-effort decoration.
         self.assertEqual(self.tmux.pane(content.id).session, first)
 
     def test_mouse_click_native_alert_row_focuses_tab_and_clears_alert(self):
@@ -1868,7 +1866,7 @@ class TmuxIntegrationTests(unittest.TestCase):
                 report = json.loads(self.tmux.run("show-options", "-pqv", "-t", content.id, "@workmux-agent"))
                 self.assertEqual(report["state"], state)  # Clearing alerts need not mutate agent reports.
         self.tmux.report_agent_state(content.id, "working", os.getpid())
-        eventually(lambda: pane_contains_any(self.tmux, original_sidebar.id, WORKING_FRAMES))
+        eventually(lambda: pane_contains_any(self.tmux, original_sidebar.id, ("♥",)))
         self.assertEqual(self.tmux.run("display-message", "-p", "-t", content.id, "#{window_bell_flag}"), "0")
 
     def test_mouse_click_agent_row_switches_workspace_and_focuses_attention_pane(self):
@@ -1942,7 +1940,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.report_agent_state(target, "working", os.getpid())
         self.attach(first)
         self.tmux.toggle_sidebar(content.id)
-        eventually(lambda: pane_contains_any(self.tmux, sidebar.id, WORKING_FRAMES))
+        eventually(lambda: pane_contains_any(self.tmux, sidebar.id, ("♥",)))
         self.tmux.run("send-keys", "-t", sidebar.id, "Down", "Down", "Enter")
         eventually(lambda: self.tmux.pane(target).active)
         self.assertEqual(self.tmux.pane(second + ":").id, target)

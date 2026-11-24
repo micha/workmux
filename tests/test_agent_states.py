@@ -8,7 +8,6 @@ from unittest.mock import Mock, patch
 from workmux.cli import main
 from workmux.core import Pane, Tab, Tmux, WorkmuxError, Workspace, _agent_state
 from workmux.sidebar import SidebarRow, draw_row, sidebar_rows, status_attributes
-from workmux.status import ANIMATION_INTERVAL, WORKING_FRAMES, working_indicator
 
 
 class AgentStateTests(unittest.TestCase):
@@ -262,51 +261,42 @@ class SidebarTreeTests(unittest.TestCase):
                                   "git-ahead": 1792, "git-behind": 2048,
                                   "git-diverged": 2304, "git-conflict": 2560})
         self.assertEqual([call.args[1] for call in init_pair.call_args_list],
-                         [curses.COLOR_BLUE, curses.COLOR_RED,
+                         [curses.COLOR_RED, curses.COLOR_RED,
                           curses.COLOR_GREEN, curses.COLOR_YELLOW,
                           curses.COLOR_GREEN, curses.COLOR_YELLOW,
                           curses.COLOR_CYAN, curses.COLOR_BLUE,
                           curses.COLOR_MAGENTA, curses.COLOR_RED])
 
-    def test_working_indicator_cycles_through_circle_phases(self):
-        self.assertEqual([working_indicator(frame * ANIMATION_INTERVAL)
-                          for frame in range(len(WORKING_FRAMES))], list(WORKING_FRAMES))
-        self.assertEqual(working_indicator(len(WORKING_FRAMES) * ANIMATION_INTERVAL), WORKING_FRAMES[0])
-        self.assertEqual(working_indicator(ANIMATION_INTERVAL - 0.001), WORKING_FRAMES[0])
-
-    def test_animated_working_symbol_receives_its_color(self):
-        class Screen:
-            def __init__(self):
-                self.calls = []
-
-            def getmaxyx(self):
-                return 20, 80
-
-            def addnstr(self, *args):
-                self.calls.append(args)
-
-        screen = Screen()
+    def test_only_the_heart_dims_between_beats(self):
         row = SidebarRow("$1", "@1", "└ ✦ 1:build", "working")
-        draw_row(screen, 2, "›", row, 0, {"working": 256}, "◑")
-        self.assertEqual(screen.calls[0], (2, 0, "◑ └ ✦ 1:build", 79, 0))
-        self.assertEqual(screen.calls[1], (2, 2, "└", 1, curses.A_DIM))
-        self.assertEqual(screen.calls[2], (2, 0, "◑", 1, 256))
+        for attribute in (curses.A_BOLD, curses.A_REVERSE | curses.A_DIM):
+            for dimmed in (False, True):
+                with self.subTest(attribute=attribute, dimmed=dimmed):
+                    screen = Mock()
+                    screen.getmaxyx.return_value = (20, 80)
+                    draw_row(screen, 2, " ", row, attribute, {"working": 256}, working_dimmed=dimmed)
+                    gutter = (attribute & curses.A_REVERSE) | 256 | (curses.A_DIM if dimmed else 0)
+                    self.assertEqual([call.args for call in screen.addnstr.call_args_list], [
+                        (2, 0, "♥ └ ✦ 1:build", 79, attribute),
+                        (2, 2, "└", 1, attribute | curses.A_DIM),
+                        (2, 0, "♥", 1, gutter),
+                    ])
 
     def test_agent_status_uses_gutter_without_changing_title_or_spark(self):
-        for state, indicator in (('working', '◑'), ('attention', '⚠'), ('finished', '✓')):
+        for state, indicator in (('working', '♥'), ('attention', '⚠'), ('finished', '✓')):
             for prefix in ('└', '│  └', '   └'):
                 with self.subTest(state=state, prefix=prefix):
                     screen = Mock()
                     screen.getmaxyx.return_value = (20, 80)
                     # A title containing status symbols must be rendered verbatim.
-                    text = f'{prefix} ✦ 2.1:⣷ ⚠ ✓ title'
+                    text = f'{prefix} ✦ 2.1:♥ ⚠ ✓ title'
                     row = SidebarRow('$1', '@1', text, state, pane='%7')
                     draw_row(screen, 2, '›', row, curses.A_REVERSE | curses.A_DIM,
-                             {state: 256}, '◑')
+                             {state: 256}, working_dimmed=True)
                     self.assertEqual(screen.addnstr.call_args_list[0].args,
                                      (2, 0, f'{indicator} {text}', 79, curses.A_REVERSE | curses.A_DIM))
-                    self.assertEqual(screen.addnstr.call_args_list[-1].args,
-                                     (2, 0, indicator, 1, curses.A_REVERSE | 256))
+                    gutter = curses.A_REVERSE | 256 | (curses.A_DIM if state == 'working' else 0)
+                    self.assertEqual(screen.addnstr.call_args_list[-1].args, (2, 0, indicator, 1, gutter))
                     self.assertEqual(screen.addnstr.call_count, 3 if prefix == '└' else 2)
 
     def test_native_alert_is_undimmed_in_the_gutter_with_or_without_color(self):

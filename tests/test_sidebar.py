@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from workmux.core import ActivitySnapshot, Pane, Tab, Workspace
-from workmux.sidebar import SidebarRow, draw_row, mouse_wheel_delta, run_sidebar, scroll_offset
+from workmux.sidebar import SidebarRow, _heart_pulse, draw_row, mouse_wheel_delta, run_sidebar, scroll_offset
 
 
 class ScrollGeometryTests(unittest.TestCase):
@@ -39,6 +39,12 @@ class ScrollGeometryTests(unittest.TestCase):
 
 
 class TreeRenderingTests(unittest.TestCase):
+    def test_heart_beats_for_one_second_and_rests_for_two(self):
+        for now, expected in ((0, (False, 1)), (0.999, (False, 1)), (1, (True, 3)),
+                              (2.999, (True, 3)), (3, (False, 4)), (4, (True, 6))):
+            with self.subTest(now=now):
+                self.assertEqual(_heart_pulse(now), expected)
+
     def test_branches_are_dim_without_changing_label_attributes(self):
         for branch in ("├", "└"):
             for attribute in (0, curses.A_BOLD, curses.A_REVERSE, curses.A_DIM):
@@ -109,7 +115,7 @@ class SidebarLoopTests(unittest.TestCase):
 
         screen.getch.side_effect = getch
 
-        def draw(screen, y, marker, row, attr, *args):
+        def draw(screen, y, marker, row, attr, colors, *, working_dimmed):
             drawn.append((row.key, attr))
             if markers is not None:
                 markers.append((row.key, marker))
@@ -259,7 +265,7 @@ class SidebarLoopTests(unittest.TestCase):
         self.assertEqual(len(frames), 1)
         visible = Tab('$0', '@0', 0, 'running', 'working')
         frames, _ = self.run_loop(keys, tabs=[visible], step=1.0)
-        self.assertEqual(len(frames), 6)  # Initial draw and five one-second boundaries.
+        self.assertEqual(len(frames), 4)  # Initial draw, then beats change at 1, 3, and 4 seconds.
         offscreen = Tab('$19', '@19', 0, 'running', 'working')
         frames, _ = self.run_loop(keys, tabs=[offscreen], step=1.0)
         self.assertEqual(len(frames), 1)

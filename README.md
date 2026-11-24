@@ -304,7 +304,7 @@ alongside checkouts:
 
 ```text
 › 1:project-a
-◕ ├ ✦ 1.0:build
+♥ ├ ✦ 1.0:build
 ⚠ └ ✦ 2.0:review
   2:project-b
 ✓ ├ ✦ 1.0:changes
@@ -313,16 +313,16 @@ alongside checkouts:
 
 | Indicator | Color | State |
 | --- | --- | --- |
-| Filled sectors (○ ◔ ◑ ◕ ●) | Blue | Agent working |
+| `♥` | Red | Agent working |
 | `⚠` | Red | Agent needs attention: a blocking input dialog, error, or interruption |
 | `✓` | Green | Agent finished its run |
 | `◆` | Yellow | Other tmux alert: bell, monitored activity, or silence |
 
-Agent status and native alert symbols occupy the left gutter and stay undimmed
-in inactive workspaces. The `✦` identifies an agent row. The working circle fills and
-empties one step per second.
-Each active agent pane gets its own row, even when several share a tab. Selecting
-one focuses that specific pane, including in another workspace.
+Agent status and native alert symbols occupy the left gutter and aren't dimmed
+by inactive workspaces. The red heart lights for one second and dims for two
+on terminals that support dim text. The `✦` identifies an agent row. Each active
+agent pane gets its own row, even when several share a tab. Selecting one focuses
+that pane, including in another workspace.
 
 Labels use `window.pane:title`, for example `2.1:build`, using the pane's terminal
 title or falling back to the tab name. Rows follow window-index order beneath
@@ -619,10 +619,9 @@ The `@workmux-agent-indicator` window option contains a plain activity symbol,
 without colors or Git status, and is empty when idle. It uses the sidebar's
 priority and alert-clearing rules without changing window names.
 
-At least one sidebar must be running on the server. The tab bar uses the same
-one-second animation as the sidebar, without changing `status-interval`, even
-when zero. Each tab-bar frame can redraw clients in other sessions on the same
-server.
+At least one sidebar must be running on the server. The tab bar shows a steady
+`♥` while an agent is working; only the sidebar pulses. This works without
+changing `status-interval`, even when it is zero.
 
 ## Limits and customization
 

@@ -1,26 +1,17 @@
 """Shared activity symbols and batched, plain tmux window-status publication."""
 
-from math import floor
-
 from .core import ActivitySnapshot, Tmux, WorkmuxError, quote_tmux
 
 
-WORKING_FRAMES = ("○", "◔", "◑", "◕", "●", "◕", "◑", "◔")
-ANIMATION_INTERVAL = 1.0
-INDICATORS = {"working": WORKING_FRAMES[0], "attention": "⚠", "finished": "✓", "alert": "◆"}
+INDICATORS = {"working": "♥", "attention": "⚠", "finished": "✓", "alert": "◆"}
 INDICATOR_OPTION = "@workmux-agent-indicator"
-
-
-def working_indicator(now: float) -> str:
-    """Select a shared animation frame from monotonic time."""
-    return WORKING_FRAMES[floor(now / ANIMATION_INTERVAL) % len(WORKING_FRAMES)]
 
 
 class WindowIndicators:
     """Only the oldest live owned sidebar publishes, with automatic failover.
 
     The shared activity snapshot elects the publisher without a separate poll.
-    Working windows share the sidebar's frame; only changed glyphs are written.
+    The working heart is steady in the tab bar; only changed glyphs are written.
     """
 
     def __init__(self, pane_id: str):
@@ -33,14 +24,8 @@ class WindowIndicators:
         self.states = {(tab.session, tab.id): tab.state for tab in snapshot.tabs
                        if (tab.session, tab.id) in self.values}
 
-    @property
-    def animating(self) -> bool:
-        return "working" in self.states.values()
-
-    def publish(self, tmux: Tmux, now: float) -> None:
-        frame = working_indicator(now)
-        desired = {key: frame if self.states.get(key) == "working"
-                   else INDICATORS.get(self.states.get(key, ""), "") for key in self.values}
+    def publish(self, tmux: Tmux) -> None:
+        desired = {key: INDICATORS.get(self.states.get(key, ""), "") for key in self.values}
         changed = {key: value for key, value in desired.items() if value != self.values[key]}
         if not changed:
             return
