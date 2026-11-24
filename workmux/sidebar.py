@@ -11,7 +11,7 @@ import unicodedata
 from .core import Tab, Tmux, WorkmuxError, Workspace
 from .git_status import GitStatus
 from .sidebar_state import SidebarState
-from .status import ANIMATION_INTERVAL, BRAILLE_WHEEL, INDICATORS, WindowIndicators, working_indicator
+from .status import ANIMATION_INTERVAL, INDICATORS, WindowIndicators, working_indicator
 
 
 AGENT_ROW_STATES = ("working", "attention", "finished")
@@ -57,8 +57,8 @@ def _tab_label(tab: Tab) -> str:
     number = str(tab.index)
     if tab.pane is not None and tab.pane_index is not None:
         number += f".{tab.pane_index}"
-    icon = "✦" if tab.state in AGENT_ROW_STATES else INDICATORS[tab.state]
-    return f"{icon} {number}:{_label(tab.title or tab.name)}"
+    icon = "✦ " if tab.state in AGENT_ROW_STATES else ""
+    return f"{icon}{number}:{_label(tab.title or tab.name)}"
 
 
 def _git_suffix(states: GitStatus) -> str:
@@ -158,23 +158,15 @@ def draw_row(screen, position: int, marker: str, row: SidebarRow, attribute: int
              colors: dict[str, int], working_frame: str | None = None) -> None:
     """Draw a row with undimmed gutter marks and independently colored status symbols."""
     indicator = INDICATORS.get(row.state or "", "")
-    agent = row.state in AGENT_ROW_STATES
-    if row.state == "working":
-        marker = working_frame or BRAILLE_WHEEL[0]
-    elif agent:
-        marker = indicator
+    if indicator:
+        marker = (working_frame or indicator) if row.state == "working" else indicator
     text = f"{marker} {row.text}"
     draw_text(screen, position, text, attribute)
     if (row.window is not None or row.directory is not None) and row.text.startswith(("├", "└")):
         draw_text(screen, position, row.text[0], attribute | curses.A_DIM, x=2, max_width=2)
-    color = colors.get(row.state or "", colors.get("other", 0))
-    if agent or (marker != " " and attribute & curses.A_DIM):
-        gutter_attribute = (attribute & ~curses.A_DIM) | (color if agent else 0)
-        draw_text(screen, position, marker, gutter_attribute, max_width=2)
-    if not agent and indicator and color:
-        symbol_x = text.find(indicator)
-        if symbol_x >= 0:
-            draw_text(screen, position, indicator, attribute | color, x=symbol_x, max_width=2)
+    if indicator or (marker != " " and attribute & curses.A_DIM):
+        color = colors.get("other" if row.state == "alert" else row.state, 0) if indicator else 0
+        draw_text(screen, position, marker, (attribute & ~curses.A_DIM) | color, max_width=2)
     if row.git_states:
         # Locate the suffix structurally: session names may contain symbols too.
         suffix = " ".join(GIT_INDICATORS[state] for state in row.git_states)

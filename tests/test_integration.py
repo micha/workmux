@@ -26,8 +26,8 @@ from workmux.integration import FOCUS_HOOK_OPTION
 from workmux.layouts import LAYOUTS
 from workmux.pi_reload import reload_panes
 from workmux.plugins import install_plugin
-from workmux.sidebar import BRAILLE_WHEEL, sidebar_rows
-from workmux.status import WindowIndicators
+from workmux.sidebar import sidebar_rows
+from workmux.status import WORKING_FRAMES, WindowIndicators
 
 
 def eventually(predicate, message="condition was not reached", timeout=8):
@@ -152,7 +152,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.run('select-pane', '-t', agent, '-T', 'worktree-agent')
         self.tmux.report_agent_state(content.id, 'working', os.getpid(), str(workspace))
         self.tmux.report_agent_state(agent, 'working', os.getpid(), str(linked))
-        eventually(lambda: any(frame + ' └ ✦' in capture() for frame in BRAILLE_WHEEL)
+        eventually(lambda: any(frame + ' └ ✦' in capture() for frame in WORKING_FRAMES)
                    and 'worktree-agent' in capture() and 'workspace-agent' in capture())
         rows = sidebar_rows(self.tmux.workspaces(), self.tmux.attention_tabs(),
                             checkouts={session: (str(linked),)})
@@ -203,12 +203,12 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertEqual(len(self.tmux.run('list-windows', '-t', session).splitlines()), 2)
         self.tmux.report_agent_state(content.id, 'working', os.getpid(), str(linked))
         self.tmux.select_tab(session, original.window, content.id)
-        eventually(lambda: any(frame + ' └ ✦' in capture() for frame in BRAILLE_WHEEL),
+        eventually(lambda: any(frame + ' └ ✦' in capture() for frame in WORKING_FRAMES),
                    'agent tab was not a direct workspace child')
         git('worktree', 'remove', '--force', str(linked))
         eventually(lambda: "⎇ api ' $;" not in capture(), 'removed checkout remained listed', timeout=12)
         self.assertEqual(self.tmux.pane(content.id).window, content.window)
-        self.assertTrue(pane_contains_any(self.tmux, sidebar.id, BRAILLE_WHEEL))
+        self.assertTrue(pane_contains_any(self.tmux, sidebar.id, WORKING_FRAMES))
         with self.assertRaises(WorkmuxError):
             self.tmux.select_checkout(session, str(linked), original.id)
         self.assertEqual(len(self.tmux.run('list-windows', '-t', session).splitlines()), 2)
@@ -1292,6 +1292,48 @@ class TmuxIntegrationTests(unittest.TestCase):
             "└─────────┴───────┴─────────┴───────────────────┘",
         ])
 
+    @unittest.skipUnless(shutil.which("less"), "less is needed for the Pi reload popup")
+    def test_pi_reload_popup_binding_shows_completed_results_on_the_invoking_client(self):
+        help_output = subprocess.run(["less", "--help"], capture_output=True, check=True, timeout=5)
+        if b"--mouse" not in help_output.stdout:
+            self.skipTest("less does not support --mouse")
+        self.socket = str(Path(self.temporary.name) / "socket ' $(echo nope); $TOKEN")
+        self.tmux = Tmux(socket=self.socket)
+        # The invoking client is not the newest client, and the agent to reload
+        # is on the other client's session. The result still belongs to the caller.
+        caller, caller_pane = self.native_session("caller", "sleep 60")
+        agent_session, pane = self.native_session("ready", self.fake_pi())
+        request = "@workmux-pi-reload-request"
+        self.tmux.run("set-option", "-p", "-t", pane, "@workmux-pi-reload-token", "1" * 32)
+        eventually(lambda: self.tmux.run("display-message", "-pt", pane, "#{pane_current_command}") == "pi")
+        self.tmux.run("source-file", "-", input=(
+            "bind-key M-r run-shell -b 'workmux --socket #{q:socket_path} "
+            "pi reload --popup #{q:client_name} 2>&1'\n"
+        ))
+        caller_output, other_output = bytearray(), bytearray()
+        master, _, client = self.attach(caller, caller_output)
+        self.attach(agent_session, other_output)
+        os.write(master, b"\x02\x1br")
+        advertised = eventually(lambda: self.tmux.run("show-options", "-pqv", "-t", pane, request),
+                                "popup binding did not request the reload")
+        self.assertNotIn(b"Pi reload", caller_output)
+        self.tmux.run("set-option", "-p", "-t", pane, "@workmux-pi-reload-result",
+                      advertised.split(":")[1] + ":applied")
+
+        try:
+            eventually(lambda: b"Pi reload" in caller_output and b"Applied" in caller_output,
+                       "completed result did not appear on the invoking client")
+        except AssertionError as error:
+            self.fail(f"{error}: caller={bytes(caller_output)!r}, other={bytes(other_output)!r}")
+        self.assertNotIn(b"Pi reload", other_output)
+        os.write(master, b"q")
+        # A native binding can run again only once the popup is dismissed.
+        self.tmux.run("bind-key", "F6", "set-option", "-p", "-t", caller_pane, "@popup-dismissed", "yes")
+        os.write(master, b"\x02\x1b[17~")
+        eventually(lambda: self.tmux.run("show-options", "-pqv", "-t", caller_pane, "@popup-dismissed") == "yes",
+                   "q did not return control to the invoking tmux client")
+        self.assertEqual(self.client_session(client), caller)
+
     @unittest.skipUnless(shutil.which("pi"), "Pi is not installed")
     def test_pi_reload_reloads_native_tui_and_preserves_a_draft(self):
         agent_dir = Path(self.temporary.name) / "pi-agent"
@@ -1621,7 +1663,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         current = self.tmux.new_tab(pane, "current")
         sidebar = next(item for item in self.tmux.panes(self.tmux.pane(current).window) if item.sidebar)
         self.attach(session)
-        for state, indicators in (("working", BRAILLE_WHEEL), ("attention", ("⚠",)),
+        for state, indicators in (("working", WORKING_FRAMES), ("attention", ("⚠",)),
                                   ("finished", ("✓",))):
             self.tmux.report_agent_state(pane, state, os.getpid())
             if state != "working":
@@ -1656,22 +1698,20 @@ class TmuxIntegrationTests(unittest.TestCase):
                       "@workmux-agent-indicator", "leave-me")
         output = bytearray()
         self.attach(session, output=output)
-        # Hide the sidebar's own animation: glyphs arriving on the terminal now
-        # come from the status line, not curses. No interval redraws are enabled.
+        # Hide the sidebar animation to isolate status-line updates.
         self.tmux.run("resize-pane", "-Z", "-t", current)
         self.tmux.report_agent_state(pane, "working", os.getpid())
         self.tmux.report_agent_state(current, "working", os.getpid())
-        eventually(lambda: len({glyph for glyph in BRAILLE_WHEEL if glyph.encode() in output}) >= 3,
-                   "status line did not animate with status-interval zero")
+        eventually(lambda: len({glyph for glyph in WORKING_FRAMES if glyph.encode() in output}) >= 2,
+                   "status line did not advance with status-interval zero")
         for target in (pane, current):
             for option in ("window-status-format", "window-status-current-format"):
                 rendered = self.tmux.run("display-message", "-p", "-t", target, "#{E:" + option + "}")
-                self.assertTrue(any(rendered.startswith(" " + glyph + " ") for glyph in BRAILLE_WHEEL),
-                                repr(rendered))
-        self.tmux.run("rename-window", "-t", original.window, "renamed ; $literal")
+                self.assertIn(rendered.split()[0], WORKING_FRAMES, repr(rendered))
+        self.tmux.run("rename-window", "-t", original.window, "renamed ; literal")
         self.tmux.run("move-window", "-s", original.window, "-t", session + ":9")
         eventually(lambda: self.tmux.run("display-message", "-p", "-t", pane,
-                                        "#{E:window-status-format}").lstrip()[2:].startswith("9:renamed ; $literal"))
+                                        "#{E:window-status-format}").lstrip()[2:].startswith("9:renamed ; literal"))
         self.tmux.report_agent_state(pane, "idle")
         self.tmux.report_agent_state(current, "idle")
         eventually(lambda: all(self.tmux.run("display-message", "-p", "-t", target,
@@ -1694,15 +1734,15 @@ class TmuxIntegrationTests(unittest.TestCase):
         indicator = lambda: self.tmux.run("display-message", "-p", "-t", content.id,
                                           "#{@workmux-agent-indicator}")
         self.tmux.run("send-keys", "-t", content.id, "printf '\\a'", "Enter")
-        eventually(lambda: indicator() == "●")
+        eventually(lambda: indicator() == "◆")
         self.tmux.report_agent_state(content.id, "finished", os.getpid())
         eventually(lambda: indicator() == "✓")
         self.tmux.report_agent_state(working, "working", os.getpid())
-        eventually(lambda: indicator() in BRAILLE_WHEEL)
+        eventually(lambda: indicator() in WORKING_FRAMES)
         self.tmux.report_agent_state(attention, "attention", os.getpid())
         eventually(lambda: indicator() == "⚠")
         self.tmux.run("select-window", "-t", content.window)
-        eventually(lambda: indicator() in BRAILLE_WHEEL)
+        eventually(lambda: indicator() in WORKING_FRAMES)
         self.assertEqual(self.tmux.run("display-message", "-p", "-t", content.id,
                                        "#{window_bell_flag}"), "0")
         self.tmux.report_agent_state(working, "idle")
@@ -1714,13 +1754,13 @@ class TmuxIntegrationTests(unittest.TestCase):
         process = subprocess.Popen(["sleep", "30"])
         try:
             self.tmux.report_agent_state(working, "working", process.pid)
-            eventually(lambda: indicator() in BRAILLE_WHEEL)
+            eventually(lambda: indicator() in WORKING_FRAMES)
         finally:
             process.terminate()
             process.wait(timeout=3)
         eventually(lambda: indicator() == "")
         self.tmux.report_agent_state(working, "working", os.getpid())
-        eventually(lambda: indicator() in BRAILLE_WHEEL)
+        eventually(lambda: indicator() in WORKING_FRAMES)
         self.tmux.run("set-option", "-w", "-t", content.window, "remain-on-exit", "on")
         self.tmux.run("respawn-pane", "-k", "-t", working, "exit 0")
         eventually(lambda: self.tmux.run("display-message", "-p", "-t", working, "#{pane_dead}") == "1")
@@ -1729,7 +1769,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.report_agent_state(attention, "idle")
         self.tmux.run("select-window", "-t", self.tmux.pane(observer).window)
         self.tmux.run("send-keys", "-t", content.id, "printf '\\a'", "Enter")
-        eventually(lambda: indicator() == "●")
+        eventually(lambda: indicator() == "◆")
 
     def test_window_status_publisher_fails_over_and_reload_resynchronizes(self):
         first, content, leader = self.workspace("first")
@@ -1738,21 +1778,16 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.report_agent_state(other.id, "working", os.getpid())
         indicator = lambda: self.tmux.run("display-message", "-p", "-t", other.id,
                                           "#{@workmux-agent-indicator}")
-        eventually(lambda: indicator() in BRAILLE_WHEEL)
+        eventually(lambda: indicator() in WORKING_FRAMES)
         self.assertEqual(self.tmux.activity_snapshot().publisher, leader.id)
         self.tmux.run("set-option", "-w", "-t", content.window, "remain-on-exit", "on")
         self.tmux.run("respawn-pane", "-k", "-t", leader.id, "exit 0")
         eventually(lambda: self.tmux.run("display-message", "-p", "-t", leader.id, "#{pane_dead}") == "1")
         eventually(lambda: self.tmux.activity_snapshot().publisher == follower.id)
-        frames = set()
-
-        def animating():
-            value = indicator()
-            if value in BRAILLE_WHEEL:
-                frames.add(value)
-            return len(frames) >= 3
-
-        eventually(animating, "new publisher did not continue animation")
+        self.tmux.report_agent_state(other.id, "idle")
+        eventually(lambda: indicator() == "", "new publisher did not clear the indicator")
+        self.tmux.report_agent_state(other.id, "working", os.getpid())
+        eventually(lambda: indicator() in WORKING_FRAMES, "new publisher did not update the indicator")
         self.assertEqual(self.tmux.reload_sidebars(), 2)
         eventually(lambda: self.tmux.activity_snapshot().publisher == leader.id)
         self.tmux.report_agent_state(other.id, "idle")
@@ -1794,11 +1829,25 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.run("send-keys", "-t", content.id, "printf '\\a'", "Enter")
         eventually(lambda: any(tab.id == content.window and tab.state == "alert"
                                for tab in self.tmux.attention_tabs()))
-        eventually(lambda: "└ ●" in self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
+        eventually(lambda: any(line.startswith("◆ └ ") for line in
+                               self.tmux.run("capture-pane", "-p", "-t", sidebar.id).splitlines()))
         # Child of the first workspace: pane row 2, plus the top status line.
         os.write(master, b"\x1b[<0;3;4M\x1b[<0;3;4m")
         eventually(lambda: self.tmux.pane(session + ":").id == content.id)
         eventually(lambda: not any(tab.id == content.window for tab in self.tmux.attention_tabs()))
+
+    def test_bell_from_previous_workspace_uses_the_gutter(self):
+        first, content, _ = self.workspace("first")
+        second, _, sidebar = self.workspace("second")
+        _, _, client = self.attach(first)
+        self.tmux.run("switch-client", "-c", client, "-t", second)
+        eventually(lambda: self.client_session(client) == second)
+        self.tmux.run("send-keys", "-t", content.id, "printf '\\a'", "Enter")
+        eventually(lambda: any(tab.id == content.window and tab.state == "alert"
+                               for tab in self.tmux.attention_tabs()))
+        eventually(lambda: any(line.startswith("◆ └ ") for line in
+                               self.tmux.run("capture-pane", "-p", "-t", sidebar.id).splitlines()),
+                   "native alert did not appear in the gutter of the inactive workspace")
 
     def test_mouse_click_agent_alert_clears_finished_and_attention_rows(self):
         session, content, original_sidebar = self.workspace()
@@ -1819,7 +1868,7 @@ class TmuxIntegrationTests(unittest.TestCase):
                 report = json.loads(self.tmux.run("show-options", "-pqv", "-t", content.id, "@workmux-agent"))
                 self.assertEqual(report["state"], state)  # Clearing alerts need not mutate agent reports.
         self.tmux.report_agent_state(content.id, "working", os.getpid())
-        eventually(lambda: pane_contains_any(self.tmux, original_sidebar.id, BRAILLE_WHEEL))
+        eventually(lambda: pane_contains_any(self.tmux, original_sidebar.id, WORKING_FRAMES))
         self.assertEqual(self.tmux.run("display-message", "-p", "-t", content.id, "#{window_bell_flag}"), "0")
 
     def test_mouse_click_agent_row_switches_workspace_and_focuses_attention_pane(self):
@@ -1893,7 +1942,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.report_agent_state(target, "working", os.getpid())
         self.attach(first)
         self.tmux.toggle_sidebar(content.id)
-        eventually(lambda: pane_contains_any(self.tmux, sidebar.id, BRAILLE_WHEEL))
+        eventually(lambda: pane_contains_any(self.tmux, sidebar.id, WORKING_FRAMES))
         self.tmux.run("send-keys", "-t", sidebar.id, "Down", "Down", "Enter")
         eventually(lambda: self.tmux.pane(target).active)
         self.assertEqual(self.tmux.pane(second + ":").id, target)

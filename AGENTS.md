@@ -33,9 +33,11 @@
 - `workmux/sidebar_state.py`: share server-wide workspace, checkout, Git status,
   and activity snapshots across sidebars on the same tmux server. Background
   cache staleness must not prevent local geometry repair or empty-tab cleanup.
-- `workmux/status.py`: shared activity symbols and plain animated window-status
-  publication. Elect one live owned sidebar from the activity snapshot; batch
-  changed window options without changing status formats or refresh intervals.
+- `workmux/status.py`: shared activity symbols, animation timing, and plain
+  window-status publication. Elect one live owned sidebar from the activity
+  snapshot; batch changed window options without changing status formats or
+  refresh intervals. Keep animation slow because tmux option writes redraw
+  clients and can interrupt terminal cursor blinking.
 - `workmux/checkouts.py`: bounded, read-only background discovery of Git checkouts
   and linked worktrees beneath saved workspace directories, including plain
   containers and nested checkouts. Walk directory names within the configured

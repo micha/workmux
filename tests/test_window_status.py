@@ -4,8 +4,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 from workmux.core import ActivitySnapshot, Tab, Tmux, WorkmuxError
-from workmux.status import (ANIMATION_INTERVAL, BRAILLE_WHEEL, INDICATOR_OPTION,
-                            WindowIndicators)
+from workmux.status import (ANIMATION_INTERVAL, INDICATOR_OPTION, WORKING_FRAMES,
+                            WindowIndicators, working_indicator)
 
 
 def row(pane, *, session="$0", window="@0", sidebar="", dead="0", managed="1",
@@ -51,6 +51,16 @@ class ActivitySnapshotTests(unittest.TestCase):
 
 
 class WindowIndicatorTests(unittest.TestCase):
+    def test_working_frames_use_a_shared_one_second_phase(self):
+        expected = ("○", "◔", "◑", "◕", "●", "◕", "◑", "◔")
+        self.assertEqual(WORKING_FRAMES, expected)
+        self.assertEqual(ANIMATION_INTERVAL, 1.0)
+        for index, glyph in enumerate(expected):
+            with self.subTest(index=index):
+                self.assertEqual(working_indicator(float(index)), glyph)
+                self.assertEqual(working_indicator(index + 0.999), glyph)
+        self.assertEqual(working_indicator(float(len(expected))), expected[0])
+
     def snapshot(self, states, *, publisher="%1", values=None):
         tabs = [Tab(session, window, index, "name", state)
                 for index, ((session, window), state) in enumerate(states.items())]
@@ -63,27 +73,42 @@ class WindowIndicatorTests(unittest.TestCase):
         for pane in ("%0", "%1", "%2", "%10"):
             indicators = WindowIndicators(pane)
             indicators.update(snapshot)
+            self.assertEqual(indicators.animating, pane == "%1")
             indicators.publish(tmux, 0)
         tmux.run.assert_called_once()
 
-    def test_all_working_windows_share_one_batch_per_frame(self):
+    def test_working_windows_share_one_batch_per_frame(self):
         keys = (("$0", "@0"), ("$1", "@2"))
+        static = ("$1", "@3")
+        states = {**dict.fromkeys(keys, "working"), static: "finished"}
         indicators = WindowIndicators("%1")
-        indicators.update(self.snapshot({**dict.fromkeys(keys, "working"), ("$1", "@3"): "finished"}))
+        indicators.update(self.snapshot(states))
         tmux = Mock()
-        for frame, glyph in enumerate(BRAILLE_WHEEL):
-            indicators.publish(tmux, frame * ANIMATION_INTERVAL)
-            self.assertEqual(tmux.run.call_count, frame + 1)
-            for key in keys:
-                self.assertEqual(indicators.values[key], glyph)
+        for index, glyph in enumerate(WORKING_FRAMES):
+            now = index * ANIMATION_INTERVAL + 0.001
+            indicators.publish(tmux, now)
+            self.assertEqual(tmux.run.call_count, index + 1)
+            expected = {**dict.fromkeys(keys, glyph), static: "✓"}
+            self.assertEqual(indicators.values, expected)
             batch = tmux.run.call_args.kwargs["input"]
-            self.assertEqual(batch.count(INDICATOR_OPTION), 3 if frame == 0 else 2)
+            self.assertEqual(batch.count("set-option -w -t"), 3 if index == 0 else 2)
+            self.assertIn(f"#{{!=:#{{{INDICATOR_OPTION}}},{glyph}}}", batch)
             self.assertNotIn("refresh-client", batch)
             self.assertNotIn("status-interval", batch)
             self.assertNotIn("#[", batch)
-            indicators.publish(tmux, frame * ANIMATION_INTERVAL + 0.01)
-            self.assertEqual(tmux.run.call_count, frame + 1)
-        self.assertEqual(indicators.values[("$1", "@3")], "✓")
+            indicators.update(self.snapshot(states, values=expected))
+            indicators.publish(tmux, now + ANIMATION_INTERVAL / 2)
+            self.assertEqual(tmux.run.call_count, index + 1)
+
+    def test_skipped_phases_with_the_same_glyph_do_not_write_again(self):
+        key = ("$0", "@0")
+        indicators = WindowIndicators("%1")
+        indicators.update(self.snapshot({key: "working"}))
+        tmux = Mock()
+        indicators.publish(tmux, ANIMATION_INTERVAL + 0.001)
+        indicators.publish(tmux, 7 * ANIMATION_INTERVAL + 0.001)
+        self.assertEqual(indicators.values[key], "◔")
+        tmux.run.assert_called_once()
 
     def test_static_symbols_and_idle_clearing_write_only_on_change(self):
         values = {("$0", "@0"): "", ("$0", "@1"): "", ("$0", "@2"): "", ("$0", "@3"): "stale"}
@@ -91,27 +116,33 @@ class WindowIndicatorTests(unittest.TestCase):
         indicators = WindowIndicators("%1")
         indicators.update(self.snapshot(states, values=values))
         tmux = Mock()
+        self.assertFalse(indicators.animating)
         indicators.publish(tmux, 0)
-        expected = dict(zip(values, ("⚠", "✓", "●", "")))
+        expected = dict(zip(values, ("⚠", "✓", "◆", "")))
         self.assertEqual(indicators.values, expected)
-        for frame in range(1, 10):
-            indicators.update(self.snapshot(states, values=expected))
-            indicators.publish(tmux, frame * ANIMATION_INTERVAL)
+        indicators.update(self.snapshot(states, values=expected))
+        indicators.publish(tmux, ANIMATION_INTERVAL)
         tmux.run.assert_called_once_with("source-file", "-", input=tmux.run.call_args.kwargs["input"])
 
     def test_handoff_reads_existing_values_and_clears_stale_indicators(self):
         indicators = WindowIndicators("%2")
         tmux = Mock()
-        indicators.update(self.snapshot({("$0", "@0"): "working"}))
-        indicators.publish(tmux, 0)
+        key = ("$0", "@0")
+        states = {key: "working"}
+        frame = WORKING_FRAMES[1]
+        indicators.update(self.snapshot(states))
+        indicators.publish(tmux, ANIMATION_INTERVAL)
+        indicators.update(self.snapshot(states, publisher="%2", values={key: frame}))
+        indicators.publish(tmux, ANIMATION_INTERVAL)
         tmux.run.assert_not_called()
-        indicators.update(self.snapshot({}, publisher="%2", values={("$0", "@0"): "✓"}))
-        indicators.publish(tmux, 0)
-        self.assertEqual(indicators.values, {("$0", "@0"): ""})
+        indicators.update(self.snapshot({}, publisher="%2", values={key: frame}))
+        self.assertFalse(indicators.animating)
+        indicators.publish(tmux, ANIMATION_INTERVAL)
+        self.assertEqual(indicators.values, {key: ""})
         tmux.run.assert_called_once()
-        indicators.update(self.snapshot({("$0", "@0"): "working"}))
-        indicators.publish(tmux, 0)
-        self.assertEqual(tmux.run.call_count, 1)
+        indicators.update(self.snapshot(states))
+        indicators.publish(tmux, ANIMATION_INTERVAL)
+        tmux.run.assert_called_once()
 
     def test_races_are_best_effort_and_retry_without_claiming_success(self):
         indicators = WindowIndicators("%1")
@@ -122,7 +153,7 @@ class WindowIndicatorTests(unittest.TestCase):
         self.assertEqual(indicators.values[("$0", "@0")], "")
         tmux.run.side_effect = None
         indicators.publish(tmux, 0)
-        self.assertEqual(indicators.values[("$0", "@0")], BRAILLE_WHEEL[0])
+        self.assertEqual(indicators.values[("$0", "@0")], WORKING_FRAMES[0])
         batch = tmux.run.call_args.kwargs["input"]
         self.assertIn("@workspace-sidebar", batch)
         self.assertIn("@workmux", batch)

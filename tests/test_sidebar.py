@@ -255,13 +255,13 @@ class SidebarLoopTests(unittest.TestCase):
 
     def test_idle_redraws_only_when_a_working_row_is_visible(self):
         keys = [-1] * 5
-        frames, _ = self.run_loop(keys, step=0.1)
+        frames, _ = self.run_loop(keys, step=1.0)
         self.assertEqual(len(frames), 1)
         visible = Tab('$0', '@0', 0, 'running', 'working')
-        frames, _ = self.run_loop(keys, tabs=[visible], step=0.05)
-        self.assertEqual(len(frames), 3)
+        frames, _ = self.run_loop(keys, tabs=[visible], step=1.0)
+        self.assertEqual(len(frames), 6)  # Initial draw and five one-second boundaries.
         offscreen = Tab('$19', '@19', 0, 'running', 'working')
-        frames, _ = self.run_loop(keys, tabs=[offscreen], step=0.05)
+        frames, _ = self.run_loop(keys, tabs=[offscreen], step=1.0)
         self.assertEqual(len(frames), 1)
 
     def test_resize_and_row_removal_clamp_without_selection_snapback(self):

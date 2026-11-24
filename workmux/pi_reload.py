@@ -1,7 +1,12 @@
 """One-shot Pi reload requests over the current tmux server's pane options."""
 
 from dataclasses import dataclass, field
+import os
+from pathlib import Path
 import re
+import shutil
+import subprocess
+from tempfile import TemporaryDirectory
 import time
 import unicodedata
 from uuid import uuid4
@@ -154,3 +159,60 @@ def reload_table(tmux: Tmux) -> str:
 
     return "\n".join([rule("┌", "┬", "┐"), row(header), rule("├", "┼", "┤"),
                       *map(row, rows), rule("└", "┴", "┘")])
+
+
+def _popup_client(tmux: Tmux, client: str) -> tuple[int, int, int]:
+    info = tmux.run("display-message", "-p", "-c", client,
+                    "#{client_name}\t#{client_control_mode}\t#{client_pid}\t#{client_width}\t#{client_height}")
+    fields = info.split("\t")
+    if (len(fields) != 5 or fields[:2] != [client, "0"] or not client
+            or not all(field.isdecimal() for field in fields[2:])):
+        raise WorkmuxError(f"Not an attached tmux terminal client: {client!r}")
+    return int(fields[2]), int(fields[3]), int(fields[4])
+
+
+def _popup_size(table: str, width: int, height: int) -> tuple[int, int]:
+    lines = table.split("\n")
+    # Include the border on each side and one row for less's prompt.
+    return min(max(map(_width, lines)) + 2, width * 85 // 100), min(len(lines) + 3, height * 75 // 100)
+
+
+def _popup_less() -> str:
+    message = "--popup requires less with --mouse support. Run without --popup for plain output."
+    executable = shutil.which("less")
+    if not executable:
+        raise WorkmuxError(message)
+    executable = os.path.abspath(executable)
+    # Older less versions can exit successfully on an unknown flag.
+    try:
+        help_output = subprocess.run([executable, "--help"], stdin=subprocess.DEVNULL, capture_output=True,
+                                     env={**os.environ, "LESS": ""}, timeout=5)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise WorkmuxError(message) from error
+    if help_output.returncode or b"--mouse" not in help_output.stdout.split():
+        raise WorkmuxError(message)
+    return executable
+
+
+def reload_popup(tmux: Tmux, client: str) -> None:
+    """Wait for the reload and show its snapshot on the invoking tmux client."""
+    less = _popup_less()
+    pid, _, _ = _popup_client(tmux, client)
+    table = reload_table(tmux)
+    current_pid, width, height = _popup_client(tmux, client)
+    if pid != current_pid:
+        raise WorkmuxError(f"tmux client changed while reloading Pi: {client!r}")
+    w, h = _popup_size(table, width, height)
+    if w < 3 or h < 4:
+        raise WorkmuxError("tmux client is too small for the Pi reload popup.")
+
+    with TemporaryDirectory(prefix="workmux-pi-reload-") as directory:
+        output = Path(directory) / "results.txt"
+        output.write_text(table + "\n", encoding="utf-8")
+        # tmux waits for the popup to close, so the file stays readable by less.
+        # Pass paths via the environment, not as executable shell text.
+        tmux.run("display-popup", "-c", client, "-EE", "-T", "Pi reload", "-w", str(w), "-h", str(h),
+                 "-e", "LESS=", "-e", "LESSCHARSET=utf-8", "-e", "LESSSECURE=1", "-e", "LESSHISTFILE=-",
+                 "-e", f"WORKMUX_PI_RELOAD_LESS={less}",
+                 "-e", f"WORKMUX_PI_RELOAD_OUTPUT={output}",
+                 'exec "$WORKMUX_PI_RELOAD_LESS" -+F -S --mouse < "$WORKMUX_PI_RELOAD_OUTPUT"')

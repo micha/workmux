@@ -7,8 +7,8 @@ from unittest.mock import Mock, patch
 
 from workmux.cli import main
 from workmux.core import Pane, Tab, Tmux, WorkmuxError, Workspace, _agent_state
-from workmux.sidebar import (ANIMATION_INTERVAL, BRAILLE_WHEEL, SidebarRow, draw_row,
-                             sidebar_rows, status_attributes, working_indicator)
+from workmux.sidebar import SidebarRow, draw_row, sidebar_rows, status_attributes
+from workmux.status import ANIMATION_INTERVAL, WORKING_FRAMES, working_indicator
 
 
 class AgentStateTests(unittest.TestCase):
@@ -268,11 +268,11 @@ class SidebarTreeTests(unittest.TestCase):
                           curses.COLOR_CYAN, curses.COLOR_BLUE,
                           curses.COLOR_MAGENTA, curses.COLOR_RED])
 
-    def test_working_indicator_cycles_through_braille_wheel(self):
+    def test_working_indicator_cycles_through_circle_phases(self):
         self.assertEqual([working_indicator(frame * ANIMATION_INTERVAL)
-                          for frame in range(len(BRAILLE_WHEEL))], list(BRAILLE_WHEEL))
-        self.assertEqual(working_indicator(len(BRAILLE_WHEEL) * ANIMATION_INTERVAL),
-                         BRAILLE_WHEEL[0])
+                          for frame in range(len(WORKING_FRAMES))], list(WORKING_FRAMES))
+        self.assertEqual(working_indicator(len(WORKING_FRAMES) * ANIMATION_INTERVAL), WORKING_FRAMES[0])
+        self.assertEqual(working_indicator(ANIMATION_INTERVAL - 0.001), WORKING_FRAMES[0])
 
     def test_animated_working_symbol_receives_its_color(self):
         class Screen:
@@ -287,13 +287,13 @@ class SidebarTreeTests(unittest.TestCase):
 
         screen = Screen()
         row = SidebarRow("$1", "@1", "└ ✦ 1:build", "working")
-        draw_row(screen, 2, "›", row, 0, {"working": 256}, "⢿")
-        self.assertEqual(screen.calls[0], (2, 0, "⢿ └ ✦ 1:build", 79, 0))
+        draw_row(screen, 2, "›", row, 0, {"working": 256}, "◑")
+        self.assertEqual(screen.calls[0], (2, 0, "◑ └ ✦ 1:build", 79, 0))
         self.assertEqual(screen.calls[1], (2, 2, "└", 1, curses.A_DIM))
-        self.assertEqual(screen.calls[2], (2, 0, "⢿", 1, 256))
+        self.assertEqual(screen.calls[2], (2, 0, "◑", 1, 256))
 
     def test_agent_status_uses_gutter_without_changing_title_or_spark(self):
-        for state, indicator in (('working', '⢿'), ('attention', '⚠'), ('finished', '✓')):
+        for state, indicator in (('working', '◑'), ('attention', '⚠'), ('finished', '✓')):
             for prefix in ('└', '│  └', '   └'):
                 with self.subTest(state=state, prefix=prefix):
                     screen = Mock()
@@ -302,30 +302,26 @@ class SidebarTreeTests(unittest.TestCase):
                     text = f'{prefix} ✦ 2.1:⣷ ⚠ ✓ title'
                     row = SidebarRow('$1', '@1', text, state, pane='%7')
                     draw_row(screen, 2, '›', row, curses.A_REVERSE | curses.A_DIM,
-                             {state: 256}, '⢿')
+                             {state: 256}, '◑')
                     self.assertEqual(screen.addnstr.call_args_list[0].args,
                                      (2, 0, f'{indicator} {text}', 79, curses.A_REVERSE | curses.A_DIM))
                     self.assertEqual(screen.addnstr.call_args_list[-1].args,
                                      (2, 0, indicator, 1, curses.A_REVERSE | 256))
                     self.assertEqual(screen.addnstr.call_count, 3 if prefix == '└' else 2)
 
-    def test_only_status_symbol_receives_its_color(self):
-        class Screen:
-            def __init__(self):
-                self.calls = []
-
-            def getmaxyx(self):
-                return 20, 80
-
-            def addnstr(self, *args):
-                self.calls.append(args)
-
-        screen = Screen()
-        row = SidebarRow("$1", "@1", "└ ● 1:logs", "alert")
-        draw_row(screen, 2, " ", row, curses.A_BOLD, {"other": 1024})
-        self.assertEqual(screen.calls[0], (2, 0, "  └ ● 1:logs", 79, curses.A_BOLD))
-        self.assertEqual(screen.calls[1], (2, 2, "└", 1, curses.A_BOLD | curses.A_DIM))
-        self.assertEqual(screen.calls[2], (2, 4, "●", 1, curses.A_BOLD | 1024))
+    def test_native_alert_is_undimmed_in_the_gutter_with_or_without_color(self):
+        for attr in (curses.A_BOLD, curses.A_REVERSE | curses.A_DIM):
+            for colors in ({}, {"other": 1024}):
+                with self.subTest(attr=attr, colors=colors):
+                    screen = Mock()
+                    screen.getmaxyx.return_value = (20, 80)
+                    row = SidebarRow("$1", "@1", "└ 1:logs ◆ in title", "alert")
+                    draw_row(screen, 2, " ", row, attr, colors)
+                    self.assertEqual([call.args for call in screen.addnstr.call_args_list], [
+                        (2, 0, "◆ └ 1:logs ◆ in title", 79, attr),
+                        (2, 2, "└", 1, attr | curses.A_DIM),
+                        (2, 0, "◆", 1, (attr & ~curses.A_DIM) | colors.get("other", 0)),
+                    ])
 
     def test_idle_tabs_are_hidden_and_children_are_in_window_order(self):
         workspaces = [Workspace("$1", "one", "first", "/tmp"), Workspace("$2", "two", "second", "/tmp")]
@@ -339,7 +335,7 @@ class SidebarTreeTests(unittest.TestCase):
         self.assertEqual([row.key for row in rows], [("$1", None), ("$1", "@1"), ("$1", "@2"),
                                                     ("$1", "@3"), ("$2", None), ("$2", "@4")])
         self.assertEqual([row.text for row in rows], ["1:one", "├ ✦ 1:build", "├ ✦ 2:question",
-                                                     "└ ✦ 3:done", "2:two", "└ ● 1:logs"])
+                                                     "└ ✦ 3:done", "2:two", "└ 1:logs"])
 
     def test_workspace_positions_change_without_changing_row_identity(self):
         alpha = Workspace("$8", "alpha", "old label", "/tmp")

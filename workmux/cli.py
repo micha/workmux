@@ -71,7 +71,8 @@ def parser() -> argparse.ArgumentParser:
 
     pi = commands.add_parser("pi", help="Manage registered interactive Pi instances")
     pi_actions = pi.add_subparsers(dest="action", required=True)
-    pi_actions.add_parser("reload", help="Request /reload in ready Pi panes on the selected tmux server")
+    reload_pi = pi_actions.add_parser("reload", help="Request /reload in ready Pi panes on the selected tmux server")
+    reload_pi.add_argument("--popup", metavar="CLIENT", help="Show the completed results in a tmux popup using less")
 
     agent = commands.add_parser("agent", help="Report an agent's state for sidebar tab indicators")
     agents = agent.add_subparsers(dest="action", required=True)
@@ -162,8 +163,11 @@ def main(argv: list[str] | None = None) -> int:
             roots = args.root[0] if args.root and len(args.root) == 1 else args.root
             tmux.report_agent_state(require_pane(args), args.state, args.pid, roots)
         elif args.command == "pi":
-            from .pi_reload import reload_table
-            print(reload_table(tmux))
+            from .pi_reload import reload_popup, reload_table
+            if args.popup is None:
+                print(reload_table(tmux))
+            else:
+                reload_popup(tmux, args.popup)
         elif args.command == "dispatch":
             tmux.dispatch(args.binding, require_pane(args))
         elif args.command == "workspace":

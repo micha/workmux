@@ -304,22 +304,23 @@ alongside checkouts:
 
 ```text
 › 1:project-a
-⣷ ├ ✦ 1.0:build
+◕ ├ ✦ 1.0:build
 ⚠ └ ✦ 2.0:review
   2:project-b
 ✓ ├ ✦ 1.0:changes
-  └ ● 2:logs
+◆ └ 2:logs
 ```
 
 | Indicator | Color | State |
 | --- | --- | --- |
-| Filled Braille wheel | Blue | Agent working |
+| Filled sectors (○ ◔ ◑ ◕ ●) | Blue | Agent working |
 | `⚠` | Red | Agent needs attention: a blocking input dialog, error, or interruption |
 | `✓` | Green | Agent finished its run |
-| `●` | Yellow | Other tmux alert: bell, monitored activity, or silence |
+| `◆` | Yellow | Other tmux alert: bell, monitored activity, or silence |
 
-Agent status symbols occupy the left gutter and retain full color in inactive
-workspaces. The `✦` identifies an agent row; the working indicator is animated.
+Agent status and native alert symbols occupy the left gutter and stay undimmed
+in inactive workspaces. The `✦` identifies an agent row. The working circle fills and
+empties one step per second.
 Each active agent pane gets its own row, even when several share a tab. Selecting
 one focuses that specific pane, including in another workspace.
 
@@ -440,19 +441,22 @@ inactive in non-interactive/RPC mode. Reporting failures do not stop the agent.
 
 `workmux pi reload` requests `/reload` in interactive Pi panes on the current
 tmux server, including sessions without a workmux sidebar. Pi needs `tmux` on
-its `PATH`. The command prints its results to standard output. To view them in
-a scrollable popup, add this optional binding to `~/.tmux.conf`. It requires
-`less` with `--mouse` support.
+its `PATH`. By default the command prints results to standard output and does
+not need a pager or an attached tmux client. For a scrollable popup, add this
+optional binding to `~/.tmux.conf`. Both `workmux` and `less` (with `--mouse`
+support) must be on tmux's `PATH`.
 
 ```tmux
-bind-key M-r display-popup -E -T 'Pi reload' -w 85% -h 75% \
-  'workmux pi reload 2>&1 | less -+F -S --mouse'
+bind-key M-r run-shell -b 'workmux --socket #{q:socket_path} pi reload --popup #{q:client_name} 2>&1'
 ```
 
-Prefix followed by Alt+r requests the reload immediately. The table lists panes
-where tmux sees `pi` running in the foreground. It shows both the `window.pane`
-index (such as `1.2`) and the stable pane ID (such as `%26`). Scroll with the
-arrow keys, Page Up/Down, or mouse wheel; press `q` to close.
+Prefix followed by Alt+r requests the reload immediately. When it finishes, the
+popup appears in the client that invoked the binding. It fits the results up to
+85% of that client's width and 75% of its height. The table lists panes where
+tmux sees `pi` running in the foreground. It shows both the `window.pane` index
+(such as `1.2`) and the stable pane ID (such as `%26`). Use the arrow keys to
+scroll vertically or horizontally, Page Up/Down or the mouse wheel to scroll
+vertically, and `q` to close.
 
 Pi skips panes with an active run, a draft, or a blocking prompt reported by an
 extension. `Applied` means Pi acknowledged its reload; `No response` means it
@@ -615,8 +619,10 @@ The `@workmux-agent-indicator` window option contains a plain activity symbol,
 without colors or Git status, and is empty when idle. It uses the sidebar's
 priority and alert-clearing rules without changing window names.
 
-At least one sidebar must be running on the server. Working indicators animate
-at eight frames per second without changing `status-interval`, even when zero.
+At least one sidebar must be running on the server. The tab bar uses the same
+one-second animation as the sidebar, without changing `status-interval`, even
+when zero. Each tab-bar frame can redraw clients in other sessions on the same
+server.
 
 ## Limits and customization
 

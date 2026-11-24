@@ -1,24 +1,26 @@
 """Shared activity symbols and batched, plain tmux window-status publication."""
 
+from math import floor
+
 from .core import ActivitySnapshot, Tmux, WorkmuxError, quote_tmux
 
 
-BRAILLE_WHEEL = ("⣷", "⣯", "⣟", "⡿", "⢿", "⣻", "⣽", "⣾")
-ANIMATION_INTERVAL = 0.125
-INDICATORS = {"working": BRAILLE_WHEEL[0], "attention": "⚠", "finished": "✓", "alert": "●"}
+WORKING_FRAMES = ("○", "◔", "◑", "◕", "●", "◕", "◑", "◔")
+ANIMATION_INTERVAL = 1.0
+INDICATORS = {"working": WORKING_FRAMES[0], "attention": "⚠", "finished": "✓", "alert": "◆"}
 INDICATOR_OPTION = "@workmux-agent-indicator"
 
 
 def working_indicator(now: float) -> str:
-    """Select a time-based animation frame, independent of input and polling."""
-    return BRAILLE_WHEEL[int(now / ANIMATION_INTERVAL) % len(BRAILLE_WHEEL)]
+    """Select a shared animation frame from monotonic time."""
+    return WORKING_FRAMES[floor(now / ANIMATION_INTERVAL) % len(WORKING_FRAMES)]
 
 
 class WindowIndicators:
     """Only the oldest live owned sidebar publishes, with automatic failover.
 
     The shared activity snapshot elects the publisher without a separate poll.
-    Static states write only on change; working windows share one batch/frame.
+    Working windows share the sidebar's frame; only changed glyphs are written.
     """
 
     def __init__(self, pane_id: str):
@@ -36,7 +38,8 @@ class WindowIndicators:
         return "working" in self.states.values()
 
     def publish(self, tmux: Tmux, now: float) -> None:
-        desired = {key: working_indicator(now) if self.states.get(key) == "working"
+        frame = working_indicator(now)
+        desired = {key: frame if self.states.get(key) == "working"
                    else INDICATORS.get(self.states.get(key, ""), "") for key in self.values}
         changed = {key: value for key, value in desired.items() if value != self.values[key]}
         if not changed:
@@ -44,9 +47,12 @@ class WindowIndicators:
         commands = []
         for (session, window), value in changed.items():
             target = session + ":" + window
-            # Recheck management in tmux, not just the older Python snapshot.
+            # Recheck live management and the current glyph: a shared snapshot
+            # can predate a publish, but must not cause an extra status redraw.
+            changed_glyph = f"#{{!=:#{{{INDICATOR_OPTION}}},{value}}}"
+            guard = f"#{{&&:#{{==:#{{@workmux}},1}},{changed_glyph}}}"
             command = f"set-option -w -t {target} {INDICATOR_OPTION} {quote_tmux(value)}"
-            commands.append(f'if-shell -F -t {target} "#{{==:#{{@workmux}},1}}" {quote_tmux(command)}')
+            commands.append(f"if-shell -F -t {target} {quote_tmux(guard)} {quote_tmux(command)}")
         # A removed/replaced publisher must not keep writing from its cached
         # snapshot. set-option itself schedules tmux's status redraw, even when
         # status-interval is zero; no extra client queries/refreshes are needed.
@@ -55,7 +61,7 @@ class WindowIndicators:
         try:
             tmux.run("source-file", "-", input=batch)
         except WorkmuxError:
-            # Panes/windows may close mid-frame. Retry from the next snapshot;
+            # Panes/windows may close mid-publish. Retry from the next snapshot;
             # status decoration must never interrupt sidebar navigation.
             return
         self.values.update(changed)
