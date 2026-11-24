@@ -440,20 +440,26 @@ inactive in non-interactive/RPC mode. Reporting failures do not stop the agent.
 
 `workmux pi reload` requests `/reload` in interactive Pi panes on the current
 tmux server, including sessions without a workmux sidebar. Pi needs `tmux` on
-its `PATH`. Add this optional binding to `~/.tmux.conf` to see the results in a popup:
+its `PATH`. The command prints its results to standard output. To view them in
+a scrollable popup, add this optional binding to `~/.tmux.conf`. It requires
+`less` with `--mouse` support.
 
 ```tmux
-bind-key R display-popup -T 'Pi reload' -w 85% -h 75% 'workmux pi reload'
+bind-key M-r display-popup -E -T 'Pi reload' -w 85% -h 75% \
+  'workmux pi reload 2>&1 | less -+F -S --mouse'
 ```
 
-Prefix followed by `R` requests the reload immediately; press Escape to close
-the results. Pi skips panes with an active run, a draft, or a blocking prompt
-reported by an extension. `Applied` means Pi acknowledged its reload;
-`No response` means it could not be confirmed, not necessarily that it failed.
-There is no automatic retry or simulated typing. `No reload handler` means the
-pane did not advertise support. For a long results table, run `workmux pi reload`
-from the terminal instead. If you updated the integration in an already-open Pi,
-run `/reload` there once to load it before using the binding.
+Prefix followed by Alt+r requests the reload immediately. The table lists panes
+where tmux sees `pi` running in the foreground. It shows both the `window.pane`
+index (such as `1.2`) and the stable pane ID (such as `%26`). Scroll with the
+arrow keys, Page Up/Down, or mouse wheel; press `q` to close.
+
+Pi skips panes with an active run, a draft, or a blocking prompt reported by an
+extension. `Applied` means Pi acknowledged its reload; `No response` means it
+could not be confirmed, not necessarily that it failed. There is no automatic
+retry or simulated typing. `No reload handler` means the pane did not advertise
+support. If you updated the integration in an already-open Pi, run `/reload`
+there once to load it before using the binding.
 
 ### OpenCode integration
 

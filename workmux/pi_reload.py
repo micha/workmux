@@ -3,6 +3,7 @@
 from dataclasses import dataclass, field
 import re
 import time
+import unicodedata
 from uuid import uuid4
 
 from .core import Tmux, WorkmuxError
@@ -13,7 +14,8 @@ _REQUEST = "@workmux-pi-reload-request"
 _RESULT = "@workmux-pi-reload-result"
 _ID = r"[0-9a-f]{32}"
 _REQUEST_FORMAT = re.compile(rf"{_ID}:{_ID}:([0-9]{{1,16}})")
-_PANE_FORMAT = ("#{pane_id}\t#{s/[\t\r\n]/ /:session_name}\t#{pane_dead}\t"
+_IS_PI = "#{&&:#{!:#{pane_dead}},#{==:#{pane_current_command},pi}}"
+_PANE_FORMAT = ("#{pane_id}\t#{s/[\t\r\n]/ /:session_name}\t#{window_index}.#{pane_index}\t"
                 + "\t".join("#{" + option + "}" for option in (_TOKEN, _REQUEST)))
 _RESULTS = {"applied": "Applied", "draft": "Skipped: draft", "busy": "Skipped: busy",
             "prompt": "Skipped: prompt", "failed": "Reload failed"}
@@ -27,26 +29,27 @@ class _Pane:
     id: str
     token: str
     request: str
-    sessions: set[str] = field(default_factory=set)
+    locations: set[tuple[str, str]] = field(default_factory=set)
     result: str = "No reload handler"
 
 
 def _panes(tmux: Tmux) -> dict[str, _Pane]:
     panes: dict[str, _Pane] = {}
-    for line in tmux.run("list-panes", "-a", "-F", _PANE_FORMAT, missing_ok=True).split("\n"):
+    output = tmux.run("list-panes", "-a", "-f", _IS_PI, "-F", _PANE_FORMAT, missing_ok=True)
+    for line in output.split("\n"):
         fields = line.split("\t")
         if len(fields) != 5 or not re.fullmatch(r"%[0-9]+", fields[0]):
             continue
-        pane_id, session, dead, token, request = fields
-        pane = panes.setdefault(pane_id, _Pane(pane_id, token if dead == "0" else "", request))
-        pane.sessions.add(re.sub(r"[\x00-\x1f\x7f-\x9f|]", "?", session))
+        pane_id, session, index, token, request = fields
+        pane = panes.setdefault(pane_id, _Pane(pane_id, token, request))
+        pane.locations.add((re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", session), index))
     return panes
 
 
 def _advertise(tmux: Tmux, pane: _Pane, request: str) -> str:
     # Exact comparisons in the tmux queue, not just in the Python snapshot. Never
     # target a new runtime or replace a request written by another invocation.
-    condition = (f"#{{&&:#{{!:#{{pane_dead}}}},#{{&&:#{{==:#{{{_TOKEN}}},{pane.token}}},"
+    condition = (f"#{{&&:{_IS_PI},#{{&&:#{{==:#{{{_TOKEN}}},{pane.token}}},"
                  f"#{{==:#{{{_REQUEST}}},{pane.request}}}}}}}")
     try:
         accepted = tmux.run(
@@ -73,7 +76,7 @@ def _clear(tmux: Tmux, pane: _Pane, request: str) -> None:
         pass
 
 
-def reload_panes(tmux: Tmux, *, timeout: float = _TIMEOUT) -> list[tuple[str, str, str]]:
+def reload_panes(tmux: Tmux, *, timeout: float = _TIMEOUT) -> list[tuple[str, str, str, str]]:
     """Request one reload per registered pane; `Applied` requires a matching reply."""
     panes = _panes(tmux)
     deadline = time.monotonic() + timeout
@@ -123,12 +126,31 @@ def reload_panes(tmux: Tmux, *, timeout: float = _TIMEOUT) -> list[tuple[str, st
     finally:
         for pane, _, request in pending.values():
             _clear(tmux, pane, request)
-    return sorted((", ".join(sorted(pane.sessions)), pane.id, pane.result) for pane in panes.values())
+    rows = []
+    for pane in panes.values():
+        sessions, indexes = zip(*sorted(pane.locations))
+        rows.append((", ".join(sessions), ", ".join(indexes), pane.id, pane.result))
+    return sorted(rows)
+
+
+def _width(text: str) -> int:
+    return sum(0 if unicodedata.category(char) in ("Mn", "Me", "Cf") else
+               2 if unicodedata.east_asian_width(char) in ("W", "F") else 1 for char in text)
 
 
 def reload_table(tmux: Tmux) -> str:
-    rows = [("Session", "Pane", "Result"), *reload_panes(tmux)]
-    session_width = max(len(session) for session, _, _ in rows)
-    pane_width = max(len(pane) for _, pane, _ in rows)
-    return "\n".join(f"{session:<{session_width}} | {pane:<{pane_width}} | {result}"
-                     for session, pane, result in rows)
+    rows = reload_panes(tmux)
+    if not rows:
+        return "No running Pi panes."
+    header = ("Session", "Index", "Pane ID", "Result")
+    widths = [max(map(_width, column)) for column in zip(header, *rows)]
+
+    def rule(left, joint, right):
+        return left + joint.join("─" * (width + 2) for width in widths) + right
+
+    def row(cells):
+        return "│ " + " │ ".join(cell + " " * (width - _width(cell))
+                                   for cell, width in zip(cells, widths)) + " │"
+
+    return "\n".join([rule("┌", "┬", "┐"), row(header), rule("├", "┼", "┤"),
+                      *map(row, rows), rule("└", "┴", "┘")])

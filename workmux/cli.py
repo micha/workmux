@@ -71,7 +71,7 @@ def parser() -> argparse.ArgumentParser:
 
     pi = commands.add_parser("pi", help="Manage registered interactive Pi instances")
     pi_actions = pi.add_subparsers(dest="action", required=True)
-    pi_actions.add_parser("reload", help="Request /reload in all ready Pi panes on the selected tmux server")
+    pi_actions.add_parser("reload", help="Request /reload in ready Pi panes on the selected tmux server")
 
     agent = commands.add_parser("agent", help="Report an agent's state for sidebar tab indicators")
     agents = agent.add_subparsers(dest="action", required=True)
