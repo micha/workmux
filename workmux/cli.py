@@ -69,6 +69,10 @@ def parser() -> argparse.ArgumentParser:
         add_pane(sidebars.add_parser(action))
     sidebars.add_parser("reload", help="Restart all owned sidebar panes on the selected tmux server")
 
+    pi = commands.add_parser("pi", help="Manage registered interactive Pi instances")
+    pi_actions = pi.add_subparsers(dest="action", required=True)
+    pi_actions.add_parser("reload", help="Request /reload in all ready Pi panes on the selected tmux server")
+
     agent = commands.add_parser("agent", help="Report an agent's state for sidebar tab indicators")
     agents = agent.add_subparsers(dest="action", required=True)
     state = agents.add_parser("state", help="Set or clear the agent state of a content pane")
@@ -157,6 +161,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "agent":
             roots = args.root[0] if args.root and len(args.root) == 1 else args.root
             tmux.report_agent_state(require_pane(args), args.state, args.pid, roots)
+        elif args.command == "pi":
+            from .pi_reload import reload_table
+            print(reload_table(tmux))
         elif args.command == "dispatch":
             tmux.dispatch(args.binding, require_pane(args))
         elif args.command == "workspace":

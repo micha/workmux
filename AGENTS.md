@@ -46,6 +46,8 @@
   records, and never fetch or take optional index locks.
 - `workmux/plugins.py`: explicit, safe installation/removal and status reporting
   for bundled agent integrations, including checksum-verified JSON hook files.
+- `workmux/pi_reload.py`: one-shot requests to registered Pi runtimes using
+  pane-scoped tmux options and a `wait-for` wakeup, never terminal input.
 - `workmux/agent_hooks.py`: best-effort Codex/Claude command-hook handling. Keep
   hook stdout empty, preserve native decisions/trust, and verify the harness's
   foreground terminal before reporting or sending terminal payloads.
@@ -103,6 +105,8 @@
   or closed pane does not block the agent. Use blocking UI prompt and final
   settlement events, not low-level run-end events. Sanitize terminal payloads;
   neither report state nor emit escapes in non-interactive/RPC modes.
+- Pi reload is opt-in and fixed to `/reload`. Recheck readiness in Pi, discard
+  expired requests, and require a matching runtime acknowledgment for `Applied`.
 
 ## Development and validation
 

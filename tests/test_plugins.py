@@ -175,8 +175,12 @@ class PiPluginTests(unittest.TestCase):
         if int(version.stdout.strip().lstrip("v").split(".")[0]) < 24:
             self.skipTest("Node 24+ is needed for native TypeScript loading")
         install_pi(str(self.directory))
-        script = Path(__file__).with_name("pi-notify.test.mjs")
-        result = subprocess.run([node, str(script), str(self.target)], cwd=self.directory,
-                                capture_output=True, text=True, timeout=15)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("PASS", result.stdout)
+        for fixture in ("pi-notify.test.mjs", "pi-reload.test.mjs"):
+            with self.subTest(fixture=fixture):
+                if fixture == "pi-reload.test.mjs" and not shutil.which("tmux"):
+                    self.skipTest("tmux is needed to test the Pi reload mailbox")
+                script = Path(__file__).with_name(fixture)
+                result = subprocess.run([node, str(script), str(self.target)], cwd=self.directory,
+                                        capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("PASS", result.stdout)

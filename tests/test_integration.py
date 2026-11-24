@@ -1,5 +1,6 @@
 """Real tmux tests. Every test uses a private socket and cleans up its server."""
 
+from concurrent.futures import ThreadPoolExecutor
 import fcntl
 import json
 import os
@@ -23,6 +24,8 @@ from workmux.cli import main
 from workmux.core import Tmux, WorkmuxError, quote_tmux
 from workmux.integration import FOCUS_HOOK_OPTION
 from workmux.layouts import LAYOUTS
+from workmux.pi_reload import reload_panes
+from workmux.plugins import install_plugin
 from workmux.sidebar import BRAILLE_WHEEL, sidebar_rows
 from workmux.status import WindowIndicators
 
@@ -1212,6 +1215,88 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.run("switch-client", "-c", client, "-l")
         self.assertEqual(self.client_session(client), second)
         eventually(lambda: shows(second_sidebar, ["  1:first", "› 2:second"]))
+
+    def test_pi_reload_uses_pane_mailboxes_and_counts_matching_receipts_only(self):
+        first, ready = self.native_session("ready")
+        second, busy = self.native_session("busy")
+        _, unconfirmed = self.native_session("unconfirmed")
+        _, claimed = self.native_session("claimed")
+        _, other = self.native_session("other")
+        self.tmux.run("link-window", "-ds", first + ":", "-t", second + ":")
+
+        token_option = "@workmux-pi-reload-token"
+        request_option = "@workmux-pi-reload-request"
+        result_option = "@workmux-pi-reload-result"
+        for index, pane in enumerate((ready, busy, unconfirmed, claimed), 1):
+            self.tmux.run("set-option", "-p", "-t", pane, token_option, str(index) * 32)
+        expired = f"{'1' * 32}:{'a' * 32}:1"
+        claim = f"{'4' * 32}:{'b' * 32}:{time.time_ns() // 1_000_000 + 30000}"
+        self.tmux.run("set-option", "-p", "-t", ready, request_option, expired)
+        self.tmux.run("set-option", "-p", "-t", claimed, request_option, claim)
+
+        def option(pane, name):
+            return self.tmux.run("show-options", "-pqv", "-t", pane, name)
+
+        def new_request(pane, previous=""):
+            return eventually(lambda: value if (value := option(pane, request_option)) != previous else None)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            batch = executor.submit(reload_panes, self.tmux, timeout=2)
+            ready_request = new_request(ready, expired)
+            busy_request = new_request(busy)
+            new_request(unconfirmed)
+            self.tmux.run("wait-for", "workmux-pi-reload-" + "1" * 32)
+            self.tmux.run("set-option", "-p", "-t", ready, result_option,
+                          ready_request.split(":")[1] + ":applied")
+            self.tmux.run("set-option", "-p", "-t", busy, result_option,
+                          busy_request.split(":")[1] + ":busy")
+            self.tmux.run("set-option", "-p", "-t", unconfirmed, result_option, "a" * 32 + ":applied")
+            self.assertEqual(batch.result(), [("busy", busy, "Skipped: busy"),
+                                              ("busy, ready", ready, "Applied"),
+                                              ("claimed", claimed, "Already requested"),
+                                              ("other", other, "No reload handler"),
+                                              ("unconfirmed", unconfirmed, "No response")])
+        for pane in (ready, busy, unconfirmed):
+            self.assertEqual(option(pane, request_option), "")
+            self.assertEqual(option(pane, result_option), "")
+        self.assertEqual(option(claimed, request_option), claim)
+
+    def test_pi_reload_binding_opens_results_popup_without_a_prompt(self):
+        session, _ = self.native_session("outside-workmux")
+        output = bytearray()
+        self.tmux.run("bind-key", "R", "display-popup", "-T", "Pi reload", "-w", "85%", "-h", "75%",
+                      "workmux pi reload")
+        master, _, _ = self.attach(session, output)
+        os.write(master, b"\x02R")
+        eventually(lambda: b"No reload handler" in output, "binding did not display the results table")
+        self.assertIn(b"outside-workmux", output)
+
+    @unittest.skipUnless(shutil.which("pi"), "Pi is not installed")
+    def test_pi_reload_reloads_native_tui_and_preserves_a_draft(self):
+        agent_dir = Path(self.temporary.name) / "pi-agent"
+        install_plugin("pi", str(agent_dir))
+        (agent_dir / "settings.json").write_text('{"defaultProjectTrust":"always"}')
+        environment = [arg for key in ("DATA", "CACHE", "STATE")
+                       for arg in ("-e", f"XDG_{key}_HOME={Path(self.temporary.name) / key.lower()}")]
+        pane = self.tmux.run("new-session", "-d", "-s", "pi-native", "-P", "-F", "#{pane_id}",
+                             "-c", self.temporary.name, "-x", "120", "-y", "40", *environment,
+                             "-e", "PI_CODING_AGENT_DIR=" + str(agent_dir), "pi --offline --no-session")
+
+        def registration():
+            return self.tmux.run("show-options", "-pqv", "-t", pane, "@workmux-pi-reload-token")
+
+        first_token = eventually(registration, "Pi did not register its reload handler")
+        self.assertEqual(reload_panes(self.tmux), [("pi-native", pane, "Applied")])
+        eventually(lambda: registration() not in ("", first_token), "Pi did not register after reload")
+        capture = lambda: self.tmux.run("capture-pane", "-p", "-t", pane)
+        eventually(lambda: "Reloaded keybindings" in capture(), "Pi did not finish redrawing after reload")
+        self.tmux.run("send-keys", "-l", "-t", pane, "my unsent draft")
+        try:
+            eventually(lambda: "my unsent draft" in capture(), "Pi did not render the draft")
+        except AssertionError as error:
+            self.fail(f"{error}: {capture()!r}")
+        self.assertEqual(reload_panes(self.tmux), [("pi-native", pane, "Skipped: draft")])
+        self.assertIn("my unsent draft", capture())
 
     def test_workspace_name_collision_preserves_native_session(self):
         native, pane = self.native_session("taken")
