@@ -52,6 +52,18 @@ class TreeRenderingTests(unittest.TestCase):
                                          (branch, attribute | curses.A_DIM))
                         self.assertEqual(draw.call_args_list[1].kwargs, {"x": 2, "max_width": 2})
 
+    def test_gutter_marks_stay_bright_on_dimmed_workspace_rows(self):
+        row = SidebarRow("$0", None, "1:workspace")
+        for marker in ("›", "-"):
+            with self.subTest(marker=marker), patch("workmux.sidebar.draw_text") as draw:
+                screen = Mock()
+                attribute = curses.A_REVERSE | curses.A_DIM
+                draw_row(screen, 2, marker, row, attribute, {"other": 256})
+                self.assertEqual(draw.call_count, 2)
+                self.assertEqual(draw.call_args_list[0].args, (screen, 2, f"{marker} {row.text}", attribute))
+                self.assertEqual(draw.call_args_list[1].args, (screen, 2, marker, curses.A_REVERSE))
+                self.assertEqual(draw.call_args_list[1].kwargs, {"max_width": 2})
+
     def test_workspace_label_is_not_treated_as_a_branch(self):
         with patch("workmux.sidebar.draw_text") as draw:
             draw_row(Mock(), 2, "›", SidebarRow("$0", None, "└ workspace"), 0, {})
@@ -64,7 +76,7 @@ class _StopLoop(Exception):
 
 class SidebarLoopTests(unittest.TestCase):
     def run_loop(self, actions, mouse_events=(), active=True, tabs=(), checkouts=None, windows=None,
-                 markers=None, step=1.0):
+                 markers=None, step=1.0, previous_sessions=None):
         """Advance a fake input clock; callable actions can resize or change tmux state."""
         tmux = Mock()
         tmux.repair_width.return_value = Pane("%0", "$0", "@0", True, active,
@@ -75,6 +87,7 @@ class SidebarLoopTests(unittest.TestCase):
         tmux.sidebar_snapshot.side_effect = lambda: SimpleNamespace(
             workspaces=tmux.workspaces.return_value, activity=ActivitySnapshot(list(tabs), None, {}),
             checkout_windows=windows or {}, checkouts=checkouts or {}, git_states={},
+            previous_sessions=dict(previous_sessions or {}),
         )
         screen = Mock()
         screen.getmaxyx.return_value = (10, 36)  # Six tree rows.
@@ -128,6 +141,23 @@ class SidebarLoopTests(unittest.TestCase):
         self.assertEqual([key for key, marker in markers if marker == '›'], [('$0', None)])
         self.assertEqual(dict(markers)[('$0', '%9')], ' ')
         self.assertEqual(dict(markers)[('$0', 'checkout:/jobs/repo')], ' ')
+
+    def test_previous_session_marker_updates_only_workspace_rows(self):
+        markers = []
+        previous_sessions = {'$0': '$1'}
+
+        def clear_history(screen, tmux):
+            previous_sessions.clear()
+            return -1
+
+        tabs = [Tab('$1', '@1', 0, 'agent', 'attention', '%9')]
+        frames, _ = self.run_loop([clear_history], tabs=tabs, checkouts={'$1': ('/jobs/repo',)},
+                                  markers=markers, previous_sessions=previous_sessions)
+        self.assertEqual(len(frames), 2)
+        before = dict(markers[:len(frames[0])])
+        after = dict(markers[len(frames[0]):])
+        self.assertEqual([key for key, marker in before.items() if marker == '-'], [('$1', None)])
+        self.assertEqual(after, {**before, ('$1', None): ' '})
 
     def test_other_workspaces_and_children_are_dim_even_when_selected(self):
         tabs = [Tab('$0', '@0', 0, 'local', 'working'),

@@ -1183,6 +1183,36 @@ class TmuxIntegrationTests(unittest.TestCase):
             "\n› 1:aardvark\n  2:alpha"
         ))
 
+    def test_sidebar_dash_matches_native_last_session(self):
+        first, _, first_sidebar = self.workspace("first")
+        second, _, second_sidebar = self.workspace("second")
+        native, _ = self.native_session()
+        _, _, client = self.attach(first)
+
+        def shows(sidebar, rows):
+            return self.tmux.run("capture-pane", "-p", "-t", sidebar.id).splitlines()[1:3] == rows
+
+        no_history = ["› 1:first", "  2:second"]
+        eventually(lambda: shows(first_sidebar, no_history))
+        self.tmux.run("switch-client", "-c", client, "-t", second)
+        eventually(lambda: shows(second_sidebar, ["- 1:first", "› 2:second"]))
+        self.tmux.run("switch-client", "-c", client, "-l")
+        self.assertEqual(self.client_session(client), first)
+        eventually(lambda: shows(first_sidebar, ["› 1:first", "- 2:second"]))
+
+        # A second client in the same session has its own, empty history.
+        self.attach(first)
+        eventually(lambda: shows(first_sidebar, no_history))
+
+        # A client attached elsewhere does not supply this sidebar's history.
+        self.tmux.run("switch-client", "-c", client, "-t", second)
+        eventually(lambda: shows(second_sidebar, ["- 1:first", "› 2:second"]))
+        self.assertTrue(shows(first_sidebar, no_history))
+        self.tmux.run("switch-client", "-c", client, "-t", native)
+        self.tmux.run("switch-client", "-c", client, "-l")
+        self.assertEqual(self.client_session(client), second)
+        eventually(lambda: shows(second_sidebar, ["  1:first", "› 2:second"]))
+
     def test_workspace_name_collision_preserves_native_session(self):
         native, pane = self.native_session("taken")
         with self.assertRaisesRegex(WorkmuxError, "duplicate session"):

@@ -168,9 +168,11 @@ bindings you have; it does not add missing keys. Use `workmux layout --help`
 for all available layouts.
 
 Click a workspace in the sidebar if tmux mouse support is enabled. The `›`
-marker identifies the current workspace; other workspaces and their child rows
-are dimmed. Tree branches are always dimmed. Selection restores the destination
-session's selected tab.
+marker identifies the current workspace. When exactly one client is attached to
+that workspace, `-` marks the workspace that `switch-client -l` would return to,
+if it is listed. Other workspaces and their child rows are dimmed, but gutter
+marks stay bright. Tree branches are always dimmed. Selection restores the
+destination session's selected tab.
 
 Workspaces are ordered by session name and labeled `<index>:<session-name>`,
 for example `1:workmux`. These 1-based positions can change when sessions are

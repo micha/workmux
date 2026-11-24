@@ -26,6 +26,7 @@ class SidebarSnapshot:
     checkout_windows: dict[tuple[str, str], str] = field(default_factory=dict)
     checkouts: dict[str, tuple[str, ...]] = field(default_factory=dict)
     git_states: dict[str, GitStatus | None] = field(default_factory=dict)
+    previous_sessions: dict[str, str] = field(default_factory=dict)
 
 
 def _rows(mapping):
@@ -38,7 +39,8 @@ def _encode(snapshot: SidebarSnapshot) -> str:
                        "tabs": [asdict(tab) for tab in activity.tabs], "publisher": activity.publisher,
                        "indicators": _rows(activity.indicators),
                        "checkout_windows": _rows(snapshot.checkout_windows),
-                       "checkouts": snapshot.checkouts, "git_states": snapshot.git_states},
+                       "checkouts": snapshot.checkouts, "git_states": snapshot.git_states,
+                       "previous_sessions": snapshot.previous_sessions},
                       separators=(",", ":"))
 
 
@@ -55,6 +57,7 @@ def _decode(contents: str) -> SidebarSnapshot:
         {(session, path): window for session, path, window in data["checkout_windows"]},
         {session: tuple(paths) for session, paths in data["checkouts"].items()},
         {path: tuple(states) if states is not None else None for path, states in data["git_states"].items()},
+        data.get("previous_sessions", {}),  # Older sidebars can still share this cache.
     )
 
 
@@ -192,7 +195,7 @@ class _LocalState:
         checkouts = self.checkouts.snapshot(state.workspaces)
         directories = tuple({path for paths in checkouts.values() for path in paths})
         return SidebarSnapshot(state.workspaces, state.activity, state.checkout_windows, checkouts,
-                               self.git.snapshot(state.workspaces, directories))
+                               self.git.snapshot(state.workspaces, directories), state.previous_sessions)
 
     def close(self) -> None:
         self.git.close()

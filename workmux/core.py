@@ -106,6 +106,7 @@ class SidebarSnapshot:
     workspaces: list[Workspace]
     activity: ActivitySnapshot
     checkout_windows: dict[tuple[str, str], str]
+    previous_sessions: dict[str, str]
 
 
 def _workspaces(output: str) -> list[Workspace]:
@@ -121,6 +122,19 @@ def _workspaces(output: str) -> list[Workspace]:
                 depth = None
             result.append(Workspace(*fields[:4], checkout_max_depth=depth))
     return sorted(result, key=lambda workspace: workspace.name)
+
+
+def _previous_sessions(rows: list[str], workspaces: list[Workspace]) -> dict[str, str]:
+    ids = {workspace.name: workspace.id for workspace in workspaces}
+    clients: dict[str, list[str]] = {}
+    for row in rows:
+        session, separator, previous = row.partition("\t")
+        if separator:
+            clients.setdefault(session, []).append(previous)
+    # History is per client. Like sidebar selection, don't guess which client
+    # to use if multiple clients are attached to the same session.
+    return {session: ids[names[0]] for session, names in clients.items()
+            if len(names) == 1 and names[0] in ids and ids[names[0]] != session}
 
 
 def _checkout_tabs(output: str) -> dict[tuple[str, str], str]:
@@ -331,16 +345,18 @@ class Tmux:
         """Collect all server-wide sidebar data with one client command queue."""
         output = self.run("list-sessions", "-F", "S\t" + _WORKSPACE_FORMAT, ";",
                           "list-panes", "-a", "-F", "P\t" + _EXTENDED_ACTIVITY_FORMAT, ";",
-                          "list-windows", "-a", "-F", "W\t" + _CHECKOUT_TAB_FORMAT,
+                          "list-windows", "-a", "-F", "W\t" + _CHECKOUT_TAB_FORMAT, ";",
+                          "list-clients", "-F", "C\t#{session_id}\t#{client_last_session}",
                           missing_ok=True)
-        rows = {"S": [], "P": [], "W": []}
+        rows = {"S": [], "P": [], "W": [], "C": []}
         for line in output.split("\n"):
             tag, _, row = line.partition("\t")
             if tag in rows:
                 rows[tag].append(row)
-        return SidebarSnapshot(_workspaces("\n".join(rows["S"])),
-                               _activity_snapshot("\n".join(rows["P"])),
-                               _checkout_tabs("\n".join(rows["W"])))
+        workspaces = _workspaces("\n".join(rows["S"]))
+        return SidebarSnapshot(workspaces, _activity_snapshot("\n".join(rows["P"])),
+                               _checkout_tabs("\n".join(rows["W"])),
+                               _previous_sessions(rows["C"], workspaces))
 
     def report_agent_state(self, target: str, state: str, pid: int | None = None,
                            root: str | list[str] | None = None) -> None:

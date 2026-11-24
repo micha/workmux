@@ -156,26 +156,25 @@ def draw_text(screen, row: int, text: str, attribute: int = 0, *, x: int = 0,
 
 def draw_row(screen, position: int, marker: str, row: SidebarRow, attribute: int,
              colors: dict[str, int], working_frame: str | None = None) -> None:
-    """Draw a row, coloring its status symbols independently."""
-    indicator = INDICATORS.get(row.state or "")
-    if row.state in AGENT_ROW_STATES:
-        if row.state == "working":
-            indicator = working_frame or BRAILLE_WHEEL[0]
+    """Draw a row with undimmed gutter marks and independently colored status symbols."""
+    indicator = INDICATORS.get(row.state or "", "")
+    agent = row.state in AGENT_ROW_STATES
+    if row.state == "working":
+        marker = working_frame or BRAILLE_WHEEL[0]
+    elif agent:
         marker = indicator
-        symbol_x = 0
-    else:
-        symbol_x = None
     text = f"{marker} {row.text}"
-    if symbol_x is None:
-        symbol_x = text.find(indicator) if indicator else -1
     draw_text(screen, position, text, attribute)
     if (row.window is not None or row.directory is not None) and row.text.startswith(("├", "└")):
         draw_text(screen, position, row.text[0], attribute | curses.A_DIM, x=2, max_width=2)
-    if indicator and symbol_x >= 0:
-        color = colors.get(row.state or "", colors.get("other", 0))
-        if color or row.state in AGENT_ROW_STATES:
-            symbol_attribute = attribute & ~curses.A_DIM if row.state in AGENT_ROW_STATES else attribute
-            draw_text(screen, position, indicator, symbol_attribute | color, x=symbol_x, max_width=2)
+    color = colors.get(row.state or "", colors.get("other", 0))
+    if agent or (marker != " " and attribute & curses.A_DIM):
+        gutter_attribute = (attribute & ~curses.A_DIM) | (color if agent else 0)
+        draw_text(screen, position, marker, gutter_attribute, max_width=2)
+    if not agent and indicator and color:
+        symbol_x = text.find(indicator)
+        if symbol_x >= 0:
+            draw_text(screen, position, indicator, attribute | color, x=symbol_x, max_width=2)
     if row.git_states:
         # Locate the suffix structurally: session names may contain symbols too.
         suffix = " ".join(GIT_INDICATORS[state] for state in row.git_states)
@@ -288,13 +287,17 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
             visible = rows[offset:offset + visible_rows]
             working_frame = working_indicator(now) if any(row.state == "working" for row in visible) else None
             highlight = selected_key if pane.active else None
-            view = (height, width, pane.session, pane.window, highlight, message, visible, working_frame)
+            previous_session = snapshot.previous_sessions.get(pane.session)
+            view = (height, width, pane.session, pane.window, previous_session, highlight, message, visible,
+                    working_frame)
             if view != displayed:
                 screen.erase()
                 for position, row in enumerate(visible):
-                    current = row.session == pane.session and (
-                        (row.window is None and row.directory is None) or row.window == pane.window)
-                    marker = "›" if current and row.window is None and row.directory is None else " "
+                    workspace = row.window is None and row.directory is None
+                    current = row.session == pane.session and (workspace or row.window == pane.window)
+                    marker = " "
+                    if workspace:
+                        marker = "›" if current else "-" if row.session == previous_session else " "
                     attribute = curses.A_REVERSE if row.key == highlight else 0
                     if row.session != pane.session:
                         attribute |= curses.A_DIM
