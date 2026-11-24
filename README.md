@@ -319,10 +319,11 @@ alongside checkouts:
 | `◆` | Yellow | Other tmux alert: bell, monitored activity, or silence |
 
 Agent status and native alert symbols occupy the left gutter and aren't dimmed
-by inactive workspaces. The red heart lights for one second and dims for two
-on terminals that support dim text. The `✦` identifies an agent row. Each active
-agent pane gets its own row, even when several share a tab. Selecting one focuses
-that pane, including in another workspace.
+by inactive workspaces. On terminals that support dim text, the red heart repeats
+a double beat every second: dim for 700 ms, bright for 100 ms, dim for 100 ms,
+bright for 100 ms. The `✦` identifies an agent row. Each active agent pane gets
+its own row, even when several share a tab. Selecting one focuses that pane,
+including in another workspace.
 
 Labels use `window.pane:title`, for example `2.1:build`, using the pane's terminal
 title or falling back to the tab name. Rows follow window-index order beneath

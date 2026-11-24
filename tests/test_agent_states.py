@@ -267,15 +267,15 @@ class SidebarTreeTests(unittest.TestCase):
                           curses.COLOR_CYAN, curses.COLOR_BLUE,
                           curses.COLOR_MAGENTA, curses.COLOR_RED])
 
-    def test_only_the_heart_dims_between_beats(self):
+    def test_only_the_filled_heart_dims_between_beats(self):
         row = SidebarRow("$1", "@1", "└ ✦ 1:build", "working")
         for attribute in (curses.A_BOLD, curses.A_REVERSE | curses.A_DIM):
-            for dimmed in (False, True):
-                with self.subTest(attribute=attribute, dimmed=dimmed):
+            for resting in (False, True):
+                with self.subTest(attribute=attribute, resting=resting):
                     screen = Mock()
                     screen.getmaxyx.return_value = (20, 80)
-                    draw_row(screen, 2, " ", row, attribute, {"working": 256}, working_dimmed=dimmed)
-                    gutter = (attribute & curses.A_REVERSE) | 256 | (curses.A_DIM if dimmed else 0)
+                    draw_row(screen, 2, " ", row, attribute, {"working": 256}, working_resting=resting)
+                    gutter = (attribute & curses.A_REVERSE) | 256 | (curses.A_DIM if resting else 0)
                     self.assertEqual([call.args for call in screen.addnstr.call_args_list], [
                         (2, 0, "♥ └ ✦ 1:build", 79, attribute),
                         (2, 2, "└", 1, attribute | curses.A_DIM),
@@ -292,7 +292,7 @@ class SidebarTreeTests(unittest.TestCase):
                     text = f'{prefix} ✦ 2.1:♥ ⚠ ✓ title'
                     row = SidebarRow('$1', '@1', text, state, pane='%7')
                     draw_row(screen, 2, '›', row, curses.A_REVERSE | curses.A_DIM,
-                             {state: 256}, working_dimmed=True)
+                             {state: 256}, working_resting=True)
                     self.assertEqual(screen.addnstr.call_args_list[0].args,
                                      (2, 0, f'{indicator} {text}', 79, curses.A_REVERSE | curses.A_DIM))
                     gutter = curses.A_REVERSE | 256 | (curses.A_DIM if state == 'working' else 0)

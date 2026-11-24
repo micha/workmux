@@ -39,9 +39,12 @@ class ScrollGeometryTests(unittest.TestCase):
 
 
 class TreeRenderingTests(unittest.TestCase):
-    def test_heart_beats_for_one_second_and_rests_for_two(self):
-        for now, expected in ((0, (False, 1)), (0.999, (False, 1)), (1, (True, 3)),
-                              (2.999, (True, 3)), (3, (False, 4)), (4, (True, 6))):
+    def test_heart_beats_twice_each_second(self):
+        for now, expected in ((0, (True, 0.7)), (0.699, (True, 0.7)),
+                              (0.7, (False, 0.8)), (0.799, (False, 0.8)),
+                              (0.8, (True, 0.9)), (0.899, (True, 0.9)),
+                              (0.9, (False, 1)), (0.999, (False, 1)),
+                              (1, (True, 1.7)), (1.7, (False, 1.8))):
             with self.subTest(now=now):
                 self.assertEqual(_heart_pulse(now), expected)
 
@@ -115,7 +118,7 @@ class SidebarLoopTests(unittest.TestCase):
 
         screen.getch.side_effect = getch
 
-        def draw(screen, y, marker, row, attr, colors, *, working_dimmed):
+        def draw(screen, y, marker, row, attr, colors, *, working_resting):
             drawn.append((row.key, attr))
             if markers is not None:
                 markers.append((row.key, marker))
@@ -260,14 +263,15 @@ class SidebarLoopTests(unittest.TestCase):
         tmux.sidebar_snapshot.assert_called_once_with()
 
     def test_idle_redraws_only_when_a_working_row_is_visible(self):
-        keys = [-1] * 5
-        frames, _ = self.run_loop(keys, step=1.0)
+        keys = [-1] * 32
+        step = 0.0625
+        frames, _ = self.run_loop(keys, step=step)
         self.assertEqual(len(frames), 1)
         visible = Tab('$0', '@0', 0, 'running', 'working')
-        frames, _ = self.run_loop(keys, tabs=[visible], step=1.0)
-        self.assertEqual(len(frames), 4)  # Initial draw, then beats change at 1, 3, and 4 seconds.
+        frames, _ = self.run_loop(keys, tabs=[visible], step=step)
+        self.assertEqual(len(frames), 9)  # Initial draw plus four brightness changes per cycle.
         offscreen = Tab('$19', '@19', 0, 'running', 'working')
-        frames, _ = self.run_loop(keys, tabs=[offscreen], step=1.0)
+        frames, _ = self.run_loop(keys, tabs=[offscreen], step=step)
         self.assertEqual(len(frames), 1)
 
     def test_resize_and_row_removal_clamp_without_selection_snapback(self):

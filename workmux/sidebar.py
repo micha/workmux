@@ -16,8 +16,8 @@ from .status import INDICATORS, WindowIndicators
 
 AGENT_ROW_STATES = ("working", "attention", "finished")
 SNAPSHOT_INTERVAL = 0.4
-HEART_BEAT_SECONDS = 1.0
-HEART_PERIOD_SECONDS = 3.0
+HEART_PERIOD_SECONDS = 1.0
+HEART_TRANSITIONS = ((0.7, True), (0.8, False), (0.9, True))  # End offset, resting.
 WHEEL_SCROLL_ROWS = 3
 GIT_INDICATORS = {"clean": "✓", "dirty": "●", "ahead": "↑", "behind": "↓",
                   "diverged": "↕", "conflict": "!"}
@@ -157,14 +157,17 @@ def draw_text(screen, row: int, text: str, attribute: int = 0, *, x: int = 0,
 
 
 def _heart_pulse(now: float) -> tuple[bool, float]:
-    """Return whether the working heart is dim and when it next changes."""
+    """Return whether the heart is between beats and when it next changes."""
     start = floor(now / HEART_PERIOD_SECONDS) * HEART_PERIOD_SECONDS
-    beat_end = start + HEART_BEAT_SECONDS
-    return (True, start + HEART_PERIOD_SECONDS) if now >= beat_end else (False, beat_end)
+    for end, resting in HEART_TRANSITIONS:
+        deadline = start + end
+        if now < deadline:
+            return resting, deadline
+    return False, start + HEART_PERIOD_SECONDS
 
 
 def draw_row(screen, position: int, marker: str, row: SidebarRow, attribute: int,
-             colors: dict[str, int], *, working_dimmed: bool = False) -> None:
+             colors: dict[str, int], *, working_resting: bool = False) -> None:
     """Draw gutter marks with brightness and color independent of workspace dimming."""
     indicator = INDICATORS.get(row.state or "", "")
     marker = indicator or marker
@@ -177,7 +180,7 @@ def draw_row(screen, position: int, marker: str, row: SidebarRow, attribute: int
         gutter = (attribute & ~curses.A_DIM) | color
         if row.state == "working":
             gutter &= ~curses.A_BOLD
-            if working_dimmed:
+            if working_resting:
                 gutter |= curses.A_DIM
         draw_text(screen, position, marker, gutter, max_width=2)
     if row.git_states:
@@ -290,14 +293,14 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
             if follow_selection:
                 offset = visible_offset(index, offset, visible_rows)
             visible = rows[offset:offset + visible_rows]
-            working_dimmed = False
+            working_resting = False
             if any(row.state == "working" for row in visible):
-                working_dimmed, next_beat = _heart_pulse(now)
+                working_resting, next_beat = _heart_pulse(now)
                 deadline = min(deadline, next_beat)
             highlight = selected_key if pane.active else None
             previous_session = snapshot.previous_sessions.get(pane.session)
             view = (height, width, pane.session, pane.window, previous_session, highlight, message, visible,
-                    working_dimmed)
+                    working_resting)
             if view != displayed:
                 screen.erase()
                 for position, row in enumerate(visible):
@@ -311,7 +314,7 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                         attribute |= curses.A_DIM
                     elif current or row.state in ("attention", "alert"):
                         attribute |= curses.A_BOLD
-                    draw_row(screen, position + 1, marker, row, attribute, colors, working_dimmed=working_dimmed)
+                    draw_row(screen, position + 1, marker, row, attribute, colors, working_resting=working_resting)
                 draw_text(screen, height - 2, message or "Enter: select  q: back", curses.A_DIM)
                 screen.refresh()
                 displayed = view
