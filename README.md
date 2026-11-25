@@ -167,12 +167,12 @@ Newer tmux versions also bind Alt+6–7 to mirrored layouts. Workmux adapts the
 bindings you have; it does not add missing keys. Use `workmux layout --help`
 for all available layouts.
 
-Click a workspace in the sidebar if tmux mouse support is enabled. The `›`
-marker identifies the current workspace. When exactly one client is attached to
-that workspace, `-` marks the workspace that `switch-client -l` would return to,
-if it is listed. Other workspaces and their child rows are dimmed, but gutter
-marks stay bright. Tree branches are always dimmed. Selection restores the
-destination session's selected tab.
+Click a workspace in the sidebar if tmux mouse support is enabled. The current
+workspace is bold and marked with `›` next to the status gutter. When exactly one
+client is attached to the current workspace, `-` marks the listed workspace that
+`switch-client -l` would return to. Other workspaces and their child rows are
+dimmed, but the `-` and gutter symbols stay undimmed. Tree branches are always
+dimmed. Selection restores the destination session's selected tab.
 
 Workspaces are ordered by session name and labeled `<index>:<session-name>`,
 for example `1:workmux`. These 1-based positions can change when sessions are
@@ -213,9 +213,9 @@ or worktrees. Discovered checkouts appear as `⎇` rows labeled with the directo
 basename. Checkouts and agents are direct children of the workspace:
 
 ```text
-› 1:job
-  ├ ⎇ backend ● ↑
-  ├ ⎇ frontend ✓
+ ›1:job
+↑ ├ ⎇ backend
+  ├ ⎇ frontend
 ⣷ ├ ✦ 1.0:coordinate
 ⣷ ├ ✦ 2.0:implement
 ⚠ └ ✦ 3.0:review
@@ -258,36 +258,35 @@ is depth 3. A value of `0` disables discovery below the workspace root. Unset,
 negative, or invalid values use the default of 6. Higher depths remain subject
 to the other scan budgets.
 
-Every checkout has its own Git indicators. The workspace's indicators still
-refer only to its saved directory, not an aggregate of nested repositories.
+Every checkout has its own Git status. The workspace's Git status still refers
+only to its saved directory, not an aggregate of nested repositories.
 Removing a checkout removes its discovered row, **not its live tabs or content**.
 Agent rows remain direct children of the workspace. Workmux does not manage
 pushes, pull requests, or checkout cleanup.
 
 ### Git status
 
-Colored symbols follow workspace and checkout names, for example `1:workmux ● ↑`.
-They describe the repository containing the workspace's saved directory (the
-content pane directory when first enabled), not whichever directory a shell
-later changes into.
+Workspace and checkout rows show at most one Git symbol in the undimmed left
+gutter, for example `↑›1:workmux` for the current workspace. Workspace status uses
+the saved directory (the content pane directory when first enabled), not the
+shell's current directory.
 
-| Indicator | Color | Git state |
-| --- | --- | --- |
-| `✓` | Green | Clean; in sync if an upstream is configured |
-| `●` | Yellow | Non-conflicting local changes, including staged or untracked files |
-| `↑` | Cyan | Ahead of upstream |
-| `↓` | Blue | Behind upstream |
-| `↕` | Magenta | Ahead and behind upstream (diverged) |
-| `!` | Red | Merge conflicts |
+Color shows repository status: **red** for conflicts, otherwise **amber** for
+local changes (including staged or untracked files), otherwise **blue** for clean.
+The symbol shows how the branch compares to its upstream:
 
-All applicable indicators are shown: conflicts first, then non-conflicting local
-changes, then upstream status. For example, `! ● ↕` means merge conflicts, other
-local changes, and a diverged branch. Divergence uses `↕` instead of separate
-`↑ ↓` symbols. `✓` appears only when there are no changes, conflicts, or upstream
-differences. Without an upstream, only clean/local changes/conflicts are shown.
-Git must be available on the sidebar process's `PATH`; it is optional. Non-Git
-folders and unavailable or failed checks show no symbol. Colors fall back to
-plain symbols on terminals without color support.
+| Symbol | Upstream status |
+| --- | --- |
+| `~` | No divergence, or no configured upstream |
+| `↑` | Commits to push |
+| `↓` | Commits to pull |
+| `↕` | Commits to push and pull |
+
+For example, an amber `↑` means local changes and commits to push. A clean repo
+with no divergence shows no symbol. Non-Git folders and unavailable or failed
+checks also show no symbol. Git is optional and must be on the sidebar process's
+`PATH`. Amber falls back to yellow on basic color terminals; terminals without
+color support show plain symbols.
 
 Checks run in the background, normally every two seconds, without fetching or
 refreshing Git's index on disk. Sidebars on the same tmux server share checkout
@@ -303,7 +302,7 @@ Agent panes and tabs with native tmux alerts appear beneath their workspace,
 alongside checkouts:
 
 ```text
-› 1:project-a
+ ›1:project-a
 ♥ ├ ✦ 1.0:build
 ⚠ └ ✦ 2.0:review
   2:project-b

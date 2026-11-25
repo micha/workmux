@@ -99,13 +99,14 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.attach(session)
 
         def shows(symbol):
-            return f"1:git-project {symbol}" in self.tmux.run("capture-pane", "-p", "-t", sidebar.id)
+            output = self.tmux.run("capture-pane", "-p", "-t", sidebar.id)
+            return f"{symbol}›1:git-project" in output.splitlines()
 
-        eventually(lambda: shows("✓"), "clean repository indicator did not appear")
+        eventually(lambda: shows(" "), "clean workspace row did not appear with an empty gutter")
         (directory / "new file").write_text("untracked")
-        eventually(lambda: shows("●"), "untracked file did not change repository indicator")
+        eventually(lambda: shows("~"), "untracked file did not add a Git gutter indicator")
         (directory / "new file").unlink()
-        eventually(lambda: shows("✓"), "clean repository indicator did not return")
+        eventually(lambda: shows(" "), "cleaning the repository did not clear the gutter")
         self.assertEqual(self.tmux.pane(content.id).id, content.id)
 
     @unittest.skipUnless(shutil.which("git"), "Git is optional")
@@ -181,12 +182,14 @@ class TmuxIntegrationTests(unittest.TestCase):
         git('config', 'user.email', 'test@example.invalid')
         git('commit', '--allow-empty', '-m', 'initial')
         git('worktree', 'add', '-b', 'feature', str(linked))
+        (linked / 'untracked').write_text('changes')
         session = self.tmux.new_workspace('job', str(job))
         original = self.tmux.pane(session + ':')
         sidebar = next(pane for pane in self.tmux.panes(original.window) if pane.sidebar)
         self.attach(session)
         capture = lambda: self.tmux.run('capture-pane', '-p', '-t', sidebar.id)
-        eventually(lambda: "⎇ api ' $; ✓" in capture(), 'linked worktree was not discovered', timeout=10)
+        eventually(lambda: "~ └ ⎇ api ' $;" in capture().splitlines(),
+                   'linked worktree was not discovered with its Git status', timeout=10)
         self.assertEqual(len(self.tmux.run('list-windows', '-t', session).splitlines()), 1)
         self.tmux.toggle_sidebar(original.id)
         self.tmux.run('send-keys', '-t', sidebar.id, 'Down', 'Enter')
@@ -1134,7 +1137,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertEqual(workspace.label, "My Project")
         self.assertEqual(sidebar.width, 36)
         self.assertEqual(self.tmux.run("show-options", "-gv", "status-position"), "top")
-        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).startswith("\n› 1:My Project"))
+        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).startswith("\n ›1:My Project"))
         self.assertNotIn("WORKSPACES", self.tmux.run("capture-pane", "-p", "-t", sidebar.id))
         tab_content = self.tmux.new_tab(content.id, "editor")
         panes = self.tmux.panes(self.tmux.pane(tab_content).window)
@@ -1178,42 +1181,33 @@ class TmuxIntegrationTests(unittest.TestCase):
             [(alpha, "alpha"), (beta, "beta")],
         )
         eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).startswith(
-            "\n  1:alpha\n› 2:beta"
+            "\n  1:alpha\n ›2:beta"
         ))
         self.tmux.run("rename-session", "-t", beta, "aardvark")
         eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).startswith(
-            "\n› 1:aardvark\n  2:alpha"
+            "\n ›1:aardvark\n  2:alpha"
         ))
 
-    def test_sidebar_dash_matches_native_last_session(self):
+    def test_previous_workspace_dash_is_undimmed_and_matches_native_last_session(self):
         first, _, first_sidebar = self.workspace("first")
         second, _, second_sidebar = self.workspace("second")
-        native, _ = self.native_session()
         _, _, client = self.attach(first)
 
-        def shows(sidebar, rows):
-            return self.tmux.run("capture-pane", "-p", "-t", sidebar.id).splitlines()[1:3] == rows
+        def shows(sidebar, label, *, previous=False):
+            output = self.tmux.run("capture-pane", "-ep", "-t", sidebar.id)
+            prefix = "\x1b[2m \x1b[0m-\x1b[2m" if previous else "\x1b[2m  "
+            return f"{prefix}{label}\x1b[0m" in output.replace("\x1b[0;2m", "\x1b[2m").splitlines()
 
-        no_history = ["› 1:first", "  2:second"]
-        eventually(lambda: shows(first_sidebar, no_history))
+        eventually(lambda: shows(first_sidebar, "2:second"))
         self.tmux.run("switch-client", "-c", client, "-t", second)
-        eventually(lambda: shows(second_sidebar, ["- 1:first", "› 2:second"]))
+        eventually(lambda: shows(second_sidebar, "1:first", previous=True))
         self.tmux.run("switch-client", "-c", client, "-l")
         self.assertEqual(self.client_session(client), first)
-        eventually(lambda: shows(first_sidebar, ["› 1:first", "- 2:second"]))
+        eventually(lambda: shows(first_sidebar, "2:second", previous=True))
 
-        # A second client in the same session has its own, empty history.
+        # The two clients in the same session have distinct histories.
         self.attach(first)
-        eventually(lambda: shows(first_sidebar, no_history))
-
-        # A client attached elsewhere does not supply this sidebar's history.
-        self.tmux.run("switch-client", "-c", client, "-t", second)
-        eventually(lambda: shows(second_sidebar, ["- 1:first", "› 2:second"]))
-        self.assertTrue(shows(first_sidebar, no_history))
-        self.tmux.run("switch-client", "-c", client, "-t", native)
-        self.tmux.run("switch-client", "-c", client, "-l")
-        self.assertEqual(self.client_session(client), second)
-        eventually(lambda: shows(second_sidebar, ["  1:first", "› 2:second"]))
+        eventually(lambda: shows(first_sidebar, "2:second"))
 
     def fake_pi(self):
         # Pi sets its process title via Node. Exercise tmux's real detection without model calls.
@@ -1402,7 +1396,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         eventually(lambda: self.tmux.pane(first + ":").sidebar)
         selected_sidebar = self.tmux.pane(first + ":")
         # Send navigation through curses, then verify the attached client's session.
-        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", selected_sidebar.id).startswith("\n› 1:first"))
+        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", selected_sidebar.id).startswith("\n ›1:first"))
         self.tmux.run("send-keys", "-t", selected_sidebar.id, "Down", "Enter")
         eventually(lambda: self.client_session(client) == second)
         self.assertFalse(self.tmux.pane(second + ":").sidebar)
@@ -1458,7 +1452,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         def first_row_is(text):
             return self.tmux.run("capture-pane", "-p", "-t", sidebar.id).splitlines()[1].strip() == text
 
-        eventually(lambda: first_row_is("› 1:repo-00"))
+        eventually(lambda: first_row_is("›1:repo-00"))
         eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).splitlines()[9]
                    == "Enter: select  q: back", "sidebar did not redraw at the new height")
         # SGR wheel events over the sidebar while a content pane has focus.
@@ -1469,7 +1463,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.assertEqual(self.client_session(client), first)
         self.assertTrue(self.tmux.pane(content.id).active)
         os.write(master, b"\x1b[<64;3;3M")
-        eventually(lambda: first_row_is("› 1:repo-00"), "wheel-up did not restore the top")
+        eventually(lambda: first_row_is("›1:repo-00"), "wheel-up did not restore the top")
         os.write(master, b"\x1b[<65;3;3M")
         eventually(lambda: first_row_is("4:repo-03"))
         # Click the first visible row; its target is session 3, not session 0.
@@ -1482,14 +1476,14 @@ class TmuxIntegrationTests(unittest.TestCase):
         second, _, _ = self.workspace("second")
         self.tmux.run("set-option", "-s", "focus-events", "on")
         master, _, client = self.attach(first)
-        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).startswith("\n› 1:first"))
+        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", sidebar.id).startswith("\n ›1:first"))
         # Second workspace is pane row 2, plus one top status row (SGR coordinates are 1-based).
         os.write(master, b"\x1b[<0;3;4M\x1b[<0;3;4m")
         eventually(lambda: self.client_session(client) == second)
         self.assertFalse(self.tmux.pane(second + ":").sidebar)
         self.assertTrue(self.tmux.pane(content.id).active)
         other = next(item for item in self.tmux.panes(self.tmux.pane(second + ":").window) if item.sidebar)
-        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", other.id).startswith("\n  1:first"))
+        eventually(lambda: self.tmux.run("capture-pane", "-p", "-t", other.id).startswith("\n -1:first"))
         # The first workspace is on pane row 1, below the restored blank row.
         os.write(master, b"\x1b[<0;3;3M\x1b[<0;3;3m")
         eventually(lambda: self.client_session(client) == first)

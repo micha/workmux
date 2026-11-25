@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 
 from workmux.core import Tab, Workspace
 from workmux.git_status import GitStatusCache, POLL_INTERVAL, parse_status, probe_status
-from workmux.sidebar import GIT_INDICATORS, draw_row, sidebar_rows
+from workmux.sidebar import draw_row, sidebar_rows
 
 
 class GitStatusTests(unittest.TestCase):
@@ -162,67 +162,57 @@ class GitRepositoryTests(unittest.TestCase):
 
 
 class GitSidebarTests(unittest.TestCase):
-    def test_session_suffix_only_and_stable_identity(self):
+    def test_status_preserves_labels_and_stable_identity(self):
         workspace = Workspace("$1", "repo", "", "/repo")
         tabs = [Tab("$1", "@2", 2, "build", "working")]
         original = sidebar_rows([workspace], tabs)
-        for state, symbol in GIT_INDICATORS.items():
-            with self.subTest(state=state):
-                rows = sidebar_rows([workspace], tabs, {"$1": (state,)})
-                self.assertEqual(rows[0].text, f"1:repo {symbol}")
-                self.assertEqual(rows[0].key, original[0].key)
-                self.assertEqual(rows[1], original[1])
+        states = ("dirty", "ahead")
+        rows = sidebar_rows([workspace], tabs, {"$1": states})
+        self.assertEqual(rows[0].text, "1:repo")
+        self.assertEqual(rows[0].git_states, states)
+        self.assertEqual(rows[0].key, original[0].key)
+        self.assertEqual(rows[1], original[1])
         self.assertEqual(sidebar_rows([workspace], tabs, {"$1": None}), original)
 
-    def test_only_suffix_colored_even_with_same_symbol_in_wide_name(self):
-        screen = Mock()
-        screen.getmaxyx.return_value = (20, 80)
-        row = sidebar_rows([Workspace("$1", "✓界e\u0301", "", "/repo")], [], {"$1": ("clean",)})[0]
-        draw_row(screen, 2, "›", row, curses.A_REVERSE, {"git-clean": 256})
-        self.assertEqual(screen.addnstr.call_args_list[0].args,
-                         (2, 0, "› 1:✓界e\u0301 ✓", 79, curses.A_REVERSE))
-        self.assertEqual(screen.addnstr.call_args_list[1].args,
-                         (2, 9, "✓", 1, curses.A_REVERSE | 256))
+    def test_one_undimmed_gutter_symbol_combines_health_and_divergence(self):
+        workspace = Workspace("$1", "~↑↓↕界e\u0301", "", "/repo")
+        colors = {"git-conflict": 256, "git-dirty": 512, "git-clean": 1024}
+        attribute = curses.A_REVERSE | curses.A_DIM
+        for health, color in [((), 1024), (("dirty",), 512), (("conflict",), 256),
+                              (("dirty", "conflict"), 256)]:
+            for divergence, symbol in [((), "~"), (("ahead",), "↑"),
+                                       (("behind",), "↓"), (("diverged",), "↕")]:
+                with self.subTest(health=health, divergence=divergence):
+                    if not health and not divergence:
+                        continue  # Clean and in sync is tested separately.
+                    screen = Mock()
+                    screen.getmaxyx.return_value = (20, 80)
+                    row = sidebar_rows([workspace], [], {"$1": health + divergence})[0]
+                    draw_row(screen, 2, row, attribute, colors)
+                    self.assertEqual([call.args for call in screen.addnstr.call_args_list], [
+                        (2, 0, f"{symbol} 1:~↑↓↕界e\u0301", 79, attribute),
+                        (2, 0, symbol, 1, curses.A_REVERSE | color),
+                    ])
 
-    def test_combined_suffix_and_independent_colors_with_wide_name(self):
+    def test_no_symbol_for_clean_in_sync_or_unavailable(self):
+        workspace = Workspace("$1", "repo", "", "/repo")
+        for states in (("clean",), None):
+            with self.subTest(states=states):
+                screen = Mock()
+                screen.getmaxyx.return_value = (20, 80)
+                row = sidebar_rows([workspace], [], {"$1": states})[0]
+                draw_row(screen, 2, row, curses.A_BOLD, {"git-clean": 256})
+                screen.addnstr.assert_called_once_with(2, 0, "  1:repo", 79, curses.A_BOLD)
+
+    def test_checkout_symbol_stays_bright_without_color_in_a_narrow_sidebar(self):
         screen = Mock()
-        screen.getmaxyx.return_value = (20, 80)
-        workspace = Workspace("$1", "!●↕界e\u0301", "", "/repo")
-        tabs = [Tab("$1", "@2", 2, "build", "working")]
-        states = ("conflict", "dirty", "diverged")
-        rows = sidebar_rows([workspace], tabs, {"$1": states})
-        self.assertEqual(rows[0].text, "1:!●↕界e\u0301 ! ● ↕")
-        self.assertEqual(rows[0].git_states, states)
-        self.assertEqual(rows[0].key, ("$1", None))
-        self.assertEqual(rows[1], sidebar_rows([workspace], tabs)[1])
-        colors = {"git-conflict": 256, "git-dirty": 512, "git-diverged": 1024}
-        draw_row(screen, 2, "›", rows[0], curses.A_REVERSE, colors)
+        screen.getmaxyx.return_value = (20, 4)
+        workspace = Workspace("$1", "job", "", "/job")
+        row = sidebar_rows([workspace], [], {"/job/repo": ("dirty", "ahead")},
+                           {"$1": ("/job/repo",)})[1]
+        draw_row(screen, 2, row, curses.A_DIM, {})
         self.assertEqual([call.args for call in screen.addnstr.call_args_list], [
-            (2, 0, "› 1:!●↕界e\u0301 ! ● ↕", 79, curses.A_REVERSE),
-            (2, 11, "!", 1, curses.A_REVERSE | 256),
-            (2, 13, "●", 1, curses.A_REVERSE | 512),
-            (2, 15, "↕", 1, curses.A_REVERSE | 1024),
+            (2, 0, "↑ └ ⎇ repo", 3, curses.A_DIM),
+            (2, 2, "└", 1, curses.A_DIM),
+            (2, 0, "↑", 1, 0),
         ])
-        screen.reset_mock()
-        draw_row(screen, 2, "›", rows[0], 0, {})
-        self.assertEqual(screen.addnstr.call_count, 1)
-
-    def test_combined_suffix_clips_each_symbol_independently(self):
-        screen = Mock()
-        screen.getmaxyx.return_value = (20, 9)
-        row = sidebar_rows([Workspace("$1", "x", "", "/repo")], [],
-                           {"$1": ("dirty", "ahead")})[0]
-        draw_row(screen, 2, " ", row, 0, {"git-dirty": 256, "git-ahead": 512})
-        self.assertEqual([call.args for call in screen.addnstr.call_args_list], [
-            (2, 0, "  1:x ● ↑", 8, 0),
-            (2, 6, "●", 1, 256),
-        ])
-
-    def test_no_color_and_clipped_suffix(self):
-        screen = Mock()
-        screen.getmaxyx.return_value = (20, 8)
-        row = sidebar_rows([Workspace("$1", "long name", "", "/repo")], [], {"$1": ("dirty",)})[0]
-        for colors in ({}, {"git-dirty": 256}):
-            screen.reset_mock()
-            draw_row(screen, 2, " ", row, 0, colors)
-            self.assertEqual(screen.addnstr.call_count, 1)

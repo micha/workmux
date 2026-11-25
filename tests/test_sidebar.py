@@ -55,27 +55,27 @@ class TreeRenderingTests(unittest.TestCase):
                     with self.subTest(branch=branch, attribute=attribute, directory=directory):
                         row = SidebarRow("$0", window, f"{branch} label", directory=directory)
                         with patch("workmux.sidebar.draw_text") as draw:
-                            draw_row(Mock(), 2, " ", row, attribute, {})
+                            draw_row(Mock(), 2, row, attribute, {})
                         self.assertEqual(draw.call_args_list[0].args[3], attribute)
                         self.assertEqual(draw.call_args_list[1].args[2:],
                                          (branch, attribute | curses.A_DIM))
                         self.assertEqual(draw.call_args_list[1].kwargs, {"x": 2, "max_width": 2})
 
-    def test_gutter_marks_stay_bright_on_dimmed_workspace_rows(self):
-        row = SidebarRow("$0", None, "1:workspace")
-        for marker in ("›", "-"):
-            with self.subTest(marker=marker), patch("workmux.sidebar.draw_text") as draw:
-                screen = Mock()
-                attribute = curses.A_REVERSE | curses.A_DIM
-                draw_row(screen, 2, marker, row, attribute, {"other": 256})
-                self.assertEqual(draw.call_count, 2)
-                self.assertEqual(draw.call_args_list[0].args, (screen, 2, f"{marker} {row.text}", attribute))
-                self.assertEqual(draw.call_args_list[1].args, (screen, 2, marker, curses.A_REVERSE))
-                self.assertEqual(draw.call_args_list[1].kwargs, {"max_width": 2})
+    def test_previous_marker_is_undimmed_in_the_spacer_beside_git_status(self):
+        screen = Mock()
+        screen.getmaxyx.return_value = (20, 80)
+        row = SidebarRow("$1", None, "2:repo", git_states=("dirty", "ahead"))
+        draw_row(screen, 2, row, curses.A_DIM | curses.A_REVERSE, {"git-dirty": 256},
+                 workspace_marker="-")
+        self.assertEqual([call.args for call in screen.addnstr.call_args_list], [
+            (2, 0, "↑-2:repo", 79, curses.A_DIM | curses.A_REVERSE),
+            (2, 1, "-", 1, curses.A_REVERSE),
+            (2, 0, "↑", 1, curses.A_REVERSE | 256),
+        ])
 
     def test_workspace_label_is_not_treated_as_a_branch(self):
         with patch("workmux.sidebar.draw_text") as draw:
-            draw_row(Mock(), 2, "›", SidebarRow("$0", None, "└ workspace"), 0, {})
+            draw_row(Mock(), 2, SidebarRow("$0", None, "└ workspace"), 0, {})
         draw.assert_called_once()
 
 
@@ -85,7 +85,7 @@ class _StopLoop(Exception):
 
 class SidebarLoopTests(unittest.TestCase):
     def run_loop(self, actions, mouse_events=(), active=True, tabs=(), checkouts=None, windows=None,
-                 markers=None, step=1.0, previous_sessions=None):
+                 step=1.0, previous_sessions=None, markers=None):
         """Advance a fake input clock; callable actions can resize or change tmux state."""
         tmux = Mock()
         tmux.repair_width.return_value = Pane("%0", "$0", "@0", True, active,
@@ -118,10 +118,10 @@ class SidebarLoopTests(unittest.TestCase):
 
         screen.getch.side_effect = getch
 
-        def draw(screen, y, marker, row, attr, colors, *, working_resting):
+        def draw(screen, y, row, attr, colors, *, workspace_marker, working_resting):
             drawn.append((row.key, attr))
-            if markers is not None:
-                markers.append((row.key, marker))
+            if markers is not None and workspace_marker != ' ':
+                markers.append((len(frames), row.key, workspace_marker))
 
         with ExitStack() as stack:
             stack.enter_context(patch("workmux.sidebar.curses.wrapper", side_effect=lambda loop: loop(screen)))
@@ -142,32 +142,6 @@ class SidebarLoopTests(unittest.TestCase):
             self.assertTrue(mousemask.call_args.args[0] & 128)
         return frames, tmux
 
-    def test_caret_is_reserved_for_active_workspace_not_agent_or_checkout(self):
-        markers = []
-        tabs = [Tab('$0', '@0', 0, 'agent', 'working', '%9', ('/jobs/repo',))]
-        self.run_loop([], tabs=tabs, checkouts={'$0': ('/jobs/repo',)},
-                      windows={('$0', '/jobs/repo'): '@0'}, markers=markers)
-        self.assertEqual([key for key, marker in markers if marker == '›'], [('$0', None)])
-        self.assertEqual(dict(markers)[('$0', '%9')], ' ')
-        self.assertEqual(dict(markers)[('$0', 'checkout:/jobs/repo')], ' ')
-
-    def test_previous_session_marker_updates_only_workspace_rows(self):
-        markers = []
-        previous_sessions = {'$0': '$1'}
-
-        def clear_history(screen, tmux):
-            previous_sessions.clear()
-            return -1
-
-        tabs = [Tab('$1', '@1', 0, 'agent', 'attention', '%9')]
-        frames, _ = self.run_loop([clear_history], tabs=tabs, checkouts={'$1': ('/jobs/repo',)},
-                                  markers=markers, previous_sessions=previous_sessions)
-        self.assertEqual(len(frames), 2)
-        before = dict(markers[:len(frames[0])])
-        after = dict(markers[len(frames[0]):])
-        self.assertEqual([key for key, marker in before.items() if marker == '-'], [('$1', None)])
-        self.assertEqual(after, {**before, ('$1', None): ' '})
-
     def test_other_workspaces_and_children_are_dim_even_when_selected(self):
         tabs = [Tab('$0', '@0', 0, 'local', 'working'),
                 Tab('$1', '@1', 1, 'remote', 'attention')]
@@ -177,9 +151,29 @@ class SidebarLoopTests(unittest.TestCase):
             self.assertEqual(bool(attribute & curses.A_DIM), key[0] != '$0')
             if key[0] != '$0':
                 self.assertFalse(attribute & curses.A_BOLD)
-        selected = dict(frames[-1])[('$1', None)]
+        attributes = dict(frames[-1])
+        self.assertTrue(attributes[('$0', None)] & curses.A_BOLD)
+        selected = attributes[('$1', None)]
         self.assertTrue(selected & curses.A_REVERSE)
         self.assertTrue(selected & curses.A_DIM)
+
+    def test_workspace_markers_follow_history_without_changing_label_attributes(self):
+        previous_sessions = {'$0': '$1'}
+        tabs = [Tab('$1', '@1', 1, 'agent', 'attention', '%9')]
+        markers = []
+
+        def change_history(screen, tmux):
+            previous_sessions['$0'] = '$2'
+            return -1
+
+        frames, _ = self.run_loop([change_history], active=False, tabs=tabs, markers=markers,
+                                  checkouts={'$1': ('/jobs/repo',)}, previous_sessions=previous_sessions)
+        self.assertEqual(markers, [(0, ('$0', None), '›'), (0, ('$1', None), '-'),
+                                   (1, ('$0', None), '›'), (1, ('$2', None), '-')])
+        before, after = frames
+        self.assertEqual(dict(before)[('$0', None)], curses.A_BOLD)
+        self.assertEqual(dict(before)[('$1', None)], curses.A_DIM)
+        self.assertEqual(before, after)
 
     def test_wheel_survives_refreshes_without_focus_or_activation(self):
         for active in (True, False):

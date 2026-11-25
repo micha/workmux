@@ -247,25 +247,25 @@ class AgentStateTests(unittest.TestCase):
 
 
 class SidebarTreeTests(unittest.TestCase):
-    def test_status_colors_match_agent_meanings_and_other_alerts_are_yellow(self):
-        with patch("workmux.sidebar.curses.has_colors", return_value=True), \
-                patch("workmux.sidebar.curses.start_color"), \
-                patch("workmux.sidebar.curses.use_default_colors"), \
-                patch("workmux.sidebar.curses.init_pair") as init_pair, \
-                patch("workmux.sidebar.curses.color_pair", side_effect=lambda pair: pair * 256):
-            colors = status_attributes()
+    def test_status_colors_on_basic_and_256_color_terminals(self):
+        for count, amber in ((8, curses.COLOR_YELLOW), (256, 214)):
+            with self.subTest(count=count), \
+                    patch("workmux.sidebar.curses.has_colors", return_value=True), \
+                    patch("workmux.sidebar.curses.start_color"), \
+                    patch("workmux.sidebar.curses.use_default_colors"), \
+                    patch("workmux.sidebar.curses.COLORS", count, create=True), \
+                    patch("workmux.sidebar.curses.init_pair") as init_pair, \
+                    patch("workmux.sidebar.curses.color_pair", side_effect=lambda pair: pair * 256):
+                colors = status_attributes()
 
-        self.assertEqual(colors, {"working": 256, "attention": 512,
-                                  "finished": 768, "other": 1024,
-                                  "git-clean": 1280, "git-dirty": 1536,
-                                  "git-ahead": 1792, "git-behind": 2048,
-                                  "git-diverged": 2304, "git-conflict": 2560})
-        self.assertEqual([call.args[1] for call in init_pair.call_args_list],
-                         [curses.COLOR_RED, curses.COLOR_RED,
-                          curses.COLOR_GREEN, curses.COLOR_YELLOW,
-                          curses.COLOR_GREEN, curses.COLOR_YELLOW,
-                          curses.COLOR_CYAN, curses.COLOR_BLUE,
-                          curses.COLOR_MAGENTA, curses.COLOR_RED])
+                self.assertEqual(colors, {"working": 256, "attention": 512,
+                                          "finished": 768, "other": 1024,
+                                          "git-clean": 1280, "git-dirty": 1536,
+                                          "git-conflict": 1792})
+                self.assertEqual([call.args[1] for call in init_pair.call_args_list],
+                                 [curses.COLOR_RED, curses.COLOR_RED,
+                                  curses.COLOR_GREEN, curses.COLOR_YELLOW,
+                                  curses.COLOR_BLUE, amber, curses.COLOR_RED])
 
     def test_only_the_filled_heart_dims_between_beats(self):
         row = SidebarRow("$1", "@1", "└ ✦ 1:build", "working")
@@ -274,7 +274,7 @@ class SidebarTreeTests(unittest.TestCase):
                 with self.subTest(attribute=attribute, resting=resting):
                     screen = Mock()
                     screen.getmaxyx.return_value = (20, 80)
-                    draw_row(screen, 2, " ", row, attribute, {"working": 256}, working_resting=resting)
+                    draw_row(screen, 2, row, attribute, {"working": 256}, working_resting=resting)
                     gutter = (attribute & curses.A_REVERSE) | 256 | (curses.A_DIM if resting else 0)
                     self.assertEqual([call.args for call in screen.addnstr.call_args_list], [
                         (2, 0, "♥ └ ✦ 1:build", 79, attribute),
@@ -291,7 +291,7 @@ class SidebarTreeTests(unittest.TestCase):
                     # A title containing status symbols must be rendered verbatim.
                     text = f'{prefix} ✦ 2.1:♥ ⚠ ✓ title'
                     row = SidebarRow('$1', '@1', text, state, pane='%7')
-                    draw_row(screen, 2, '›', row, curses.A_REVERSE | curses.A_DIM,
+                    draw_row(screen, 2, row, curses.A_REVERSE | curses.A_DIM,
                              {state: 256}, working_resting=True)
                     self.assertEqual(screen.addnstr.call_args_list[0].args,
                                      (2, 0, f'{indicator} {text}', 79, curses.A_REVERSE | curses.A_DIM))
@@ -306,7 +306,7 @@ class SidebarTreeTests(unittest.TestCase):
                     screen = Mock()
                     screen.getmaxyx.return_value = (20, 80)
                     row = SidebarRow("$1", "@1", "└ 1:logs ◆ in title", "alert")
-                    draw_row(screen, 2, " ", row, attr, colors)
+                    draw_row(screen, 2, row, attr, colors)
                     self.assertEqual([call.args for call in screen.addnstr.call_args_list], [
                         (2, 0, "◆ └ 1:logs ◆ in title", 79, attr),
                         (2, 2, "└", 1, attr | curses.A_DIM),

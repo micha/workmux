@@ -6,7 +6,6 @@ from math import ceil, floor
 from pathlib import Path
 import re
 import time
-import unicodedata
 
 from .core import Tab, Tmux, WorkmuxError, Workspace
 from .git_status import GitStatus
@@ -19,18 +18,15 @@ SNAPSHOT_INTERVAL = 0.4
 HEART_PERIOD_SECONDS = 1.0
 HEART_TRANSITIONS = ((0.7, True), (0.8, False), (0.9, True))  # End offset, resting.
 WHEEL_SCROLL_ROWS = 3
-GIT_INDICATORS = {"clean": "✓", "dirty": "●", "ahead": "↑", "behind": "↓",
-                  "diverged": "↕", "conflict": "!"}
+GIT_DIVERGENCE = {"ahead": "↑", "behind": "↓", "diverged": "↕"}
+GIT_AMBER_256 = 214
 STATUS_FOREGROUNDS = {
     "working": curses.COLOR_RED,
     "attention": curses.COLOR_RED,
     "finished": curses.COLOR_GREEN,
     "other": curses.COLOR_YELLOW,
-    "git-clean": curses.COLOR_GREEN,
-    "git-dirty": curses.COLOR_YELLOW,
-    "git-ahead": curses.COLOR_CYAN,
-    "git-behind": curses.COLOR_BLUE,
-    "git-diverged": curses.COLOR_MAGENTA,
+    "git-clean": curses.COLOR_BLUE,
+    "git-dirty": curses.COLOR_YELLOW,  # Fallback for terminals without 256 colors.
     "git-conflict": curses.COLOR_RED,
 }
 
@@ -63,8 +59,10 @@ def _tab_label(tab: Tab) -> str:
     return f"{icon}{number}:{_label(tab.title or tab.name)}"
 
 
-def _git_suffix(states: GitStatus) -> str:
-    return " " + " ".join(GIT_INDICATORS[state] for state in states) if states else ""
+def _git_indicator(states: GitStatus) -> tuple[str, str]:
+    health = "conflict" if "conflict" in states else "dirty" if "dirty" in states else "clean"
+    symbol = next((GIT_DIVERGENCE[state] for state in states if state in GIT_DIVERGENCE), "")
+    return symbol or ("~" if health != "clean" else ""), f"git-{health}"
 
 
 def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
@@ -81,7 +79,7 @@ def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
     for position, workspace in enumerate(workspaces, 1):
         states = git_states.get(workspace.id) or ()
         rows.append(SidebarRow(workspace.id, None,
-                               f"{position}:{_label(workspace.name)}{_git_suffix(states)}", git_states=states))
+                               f"{position}:{_label(workspace.name)}", git_states=states))
         directories = tuple(sorted(set(checkouts.get(workspace.id, ()))))
         entries = [agent for tab in sorted(children.get(workspace.id, []), key=lambda tab: tab.index)
                    for agent in tab.agents or (tab,)]
@@ -93,7 +91,7 @@ def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
             states = git_states.get(directory) or ()
             window = checkout_windows.get((workspace.id, directory))
             rows.append(SidebarRow(workspace.id, window,
-                                   f"{branch} ⎇ {_label(name)}{_git_suffix(states)}",
+                                   f"{branch} ⎇ {_label(name)}",
                                    git_states=states, directory=directory))
         for index, tab in enumerate(entries):
             branch = "└" if index == len(entries) - 1 else "├"
@@ -134,6 +132,8 @@ def status_attributes() -> dict[str, int]:
         curses.use_default_colors()
         attributes = {}
         for pair, (state, foreground) in enumerate(STATUS_FOREGROUNDS.items(), 1):
+            if state == "git-dirty" and curses.COLORS >= 256:
+                foreground = GIT_AMBER_256
             curses.init_pair(pair, foreground, -1)
             attributes[state] = curses.color_pair(pair)
         return attributes
@@ -166,36 +166,27 @@ def _heart_pulse(now: float) -> tuple[bool, float]:
     return False, start + HEART_PERIOD_SECONDS
 
 
-def draw_row(screen, position: int, marker: str, row: SidebarRow, attribute: int,
-             colors: dict[str, int], *, working_resting: bool = False) -> None:
-    """Draw gutter marks with brightness and color independent of workspace dimming."""
-    indicator = INDICATORS.get(row.state or "", "")
-    marker = indicator or marker
-    text = f"{marker} {row.text}"
-    draw_text(screen, position, text, attribute)
+def draw_row(screen, position: int, row: SidebarRow, attribute: int,
+             colors: dict[str, int], *, workspace_marker: str = " ", working_resting: bool = False) -> None:
+    """Draw status and navigation marks independently of workspace dimming."""
+    state = row.state or ""
+    indicator = INDICATORS.get(state, "")
+    if indicator:
+        color = "other" if state == "alert" else state
+    else:
+        indicator, color = _git_indicator(row.git_states)
+    draw_text(screen, position, f"{indicator or ' '}{workspace_marker}{row.text}", attribute)
+    if workspace_marker != " " and attribute & curses.A_DIM:
+        draw_text(screen, position, workspace_marker, attribute & ~curses.A_DIM, x=1, max_width=2)
     if (row.window is not None or row.directory is not None) and row.text.startswith(("├", "└")):
         draw_text(screen, position, row.text[0], attribute | curses.A_DIM, x=2, max_width=2)
-    if indicator or (marker != " " and attribute & curses.A_DIM):
-        color = colors.get("other" if row.state == "alert" else row.state, 0) if indicator else 0
-        gutter = (attribute & ~curses.A_DIM) | color
-        if row.state == "working":
+    if indicator:
+        gutter = (attribute & ~curses.A_DIM) | colors.get(color, 0)
+        if state == "working":
             gutter &= ~curses.A_BOLD
             if working_resting:
                 gutter |= curses.A_DIM
-        draw_text(screen, position, marker, gutter, max_width=2)
-    if row.git_states:
-        # Locate the suffix structurally: session names may contain symbols too.
-        suffix = " ".join(GIT_INDICATORS[state] for state in row.git_states)
-        prefix = text[:-len(suffix)]
-        symbol_x = sum(0 if unicodedata.combining(char) else
-                       2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
-                       for char in prefix)
-        for state in row.git_states:
-            indicator = GIT_INDICATORS[state]
-            color = colors.get(f"git-{state}", 0)
-            if color:
-                draw_text(screen, position, indicator, attribute | color, x=symbol_x, max_width=2)
-            symbol_x += 2  # Each Git symbol occupies one cell, followed by a space.
+        draw_text(screen, position, indicator, gutter, max_width=2)
 
 
 def run_sidebar(tmux: Tmux, pane_id: str) -> None:
@@ -306,15 +297,16 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                 for position, row in enumerate(visible):
                     workspace = row.window is None and row.directory is None
                     current = row.session == pane.session and (workspace or row.window == pane.window)
-                    marker = " "
-                    if workspace:
-                        marker = "›" if current else "-" if row.session == previous_session else " "
                     attribute = curses.A_REVERSE if row.key == highlight else 0
                     if row.session != pane.session:
                         attribute |= curses.A_DIM
                     elif current or row.state in ("attention", "alert"):
                         attribute |= curses.A_BOLD
-                    draw_row(screen, position + 1, marker, row, attribute, colors, working_resting=working_resting)
+                    marker = " "
+                    if workspace:
+                        marker = "›" if current else "-" if row.session == previous_session else " "
+                    draw_row(screen, position + 1, row, attribute, colors,
+                             workspace_marker=marker, working_resting=working_resting)
                 draw_text(screen, height - 2, message or "Enter: select  q: back", curses.A_DIM)
                 screen.refresh()
                 displayed = view

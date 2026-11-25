@@ -70,11 +70,11 @@ def main() -> None:
                 "  \033[2mStaged demo · no model calls\033[0m",
                 "",
                 "  \033[1mYou\033[0m",
-                "  Let's make the tree characters always dimmed.",
+                "  Let's move Git status into the sidebar gutter.",
                 "",
                 "  \033[1;36mPi\033[0m",
                 "  Updating the sidebar renderer and regression tests.",
-                "  Labels and status symbols keep their own styling.",
+                "  Color shows repo health; arrows show upstream divergence.",
                 "",
                 "  \033[34m⠿ Working\033[0m  ·  sidebar.py + tests",
             ], project / "sidebar")

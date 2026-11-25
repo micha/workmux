@@ -240,8 +240,10 @@ class CheckoutSidebarTests(unittest.TestCase):
         rows = sidebar_rows([self.workspace], tabs, {api: ('dirty', 'ahead'), ui: ('clean',)},
                             self.checkouts, {('$1', api): '@7'})
         self.assertEqual([row.text for row in rows], [
-            '1:job', '├ ⎇ api ● ↑', '├ ⎇ ui ✓', '├ ✦ 1:coordinate',
+            '1:job', '├ ⎇ api', '├ ⎇ ui', '├ ✦ 1:coordinate',
             '├ ✦ 2:implement', '└ ✦ 3:review'])
+        self.assertEqual(rows[1].git_states, ('dirty', 'ahead'))
+        self.assertEqual(rows[2].git_states, ('clean',))
         self.assertEqual(rows[1].key, ('$1', 'checkout:' + api))
         self.assertEqual(rows[1].window, '@7')
         self.assertEqual(rows[4].key, ('$1', '%2'))
