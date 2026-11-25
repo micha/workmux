@@ -7,7 +7,11 @@ import unittest
 from unittest.mock import Mock, patch
 
 from workmux.core import ActivitySnapshot, Pane, Tab, Workspace
-from workmux.sidebar import SidebarRow, _heart_pulse, draw_row, mouse_wheel_delta, run_sidebar, scroll_offset
+from workmux.git_status import GitStatus
+from workmux.sidebar import (SidebarRow, _heart_pulse, _italic_attribute, draw_row, mouse_wheel_delta,
+                             run_sidebar, scroll_offset)
+
+ITALIC = 1 << 31
 
 
 class ScrollGeometryTests(unittest.TestCase):
@@ -64,7 +68,7 @@ class TreeRenderingTests(unittest.TestCase):
     def test_previous_marker_is_undimmed_in_the_spacer_beside_git_status(self):
         screen = Mock()
         screen.getmaxyx.return_value = (20, 80)
-        row = SidebarRow("$1", None, "2:repo", git_states=("dirty", "ahead"))
+        row = SidebarRow("$1", None, "2:repo", git_status=GitStatus(("dirty", "ahead")))
         draw_row(screen, 2, row, curses.A_DIM | curses.A_REVERSE, {"git-dirty": 256},
                  workspace_marker="-")
         self.assertEqual([call.args for call in screen.addnstr.call_args_list], [
@@ -72,6 +76,47 @@ class TreeRenderingTests(unittest.TestCase):
             (2, 1, "-", 1, curses.A_REVERSE),
             (2, 0, "↑", 1, curses.A_REVERSE | 256),
         ])
+
+    def test_italics_require_both_curses_and_terminfo_support(self):
+        with patch("workmux.sidebar.curses", Mock(spec=["termattrs"])):
+            self.assertEqual(_italic_attribute(), 0)
+        with patch("workmux.sidebar.curses.A_ITALIC", ITALIC, create=True), \
+                patch("workmux.sidebar.curses.termattrs") as attrs:
+            attrs.return_value = curses.A_DIM
+            self.assertEqual(_italic_attribute(), 0)
+            attrs.return_value |= ITALIC
+            self.assertEqual(_italic_attribute(), ITALIC)
+
+    def test_branch_suffix_is_subdued_and_fits_after_name_in_terminal_columns(self):
+        for row, end, width, plain, styled in (
+            (SidebarRow("$1", None, "2:界", git_status=GitStatus(("clean",), "main")),
+             (2, 6), 14, " (main)", " main"),
+            (SidebarRow("$1", "@2", "└ ⎇ api", directory="/job/api",
+                        git_status=GitStatus(("dirty",), "feat/login")),
+             (2, 9), 18, " (feat…)", " feat/l…"),
+            (SidebarRow("$1", None, "2:repo", git_status=GitStatus(("clean",), "界e\u0301-long")),
+             (2, 8), 16, " (界e\u0301…)", " 界e\u0301-l…"),
+            (SidebarRow("$1", None, "2:repo", git_status=GitStatus(("clean",), "feat\x1b")),
+             (2, 8), 36, " (feat )", " feat "),
+            (SidebarRow("$1", None, "2:repo", git_status=GitStatus(("clean",), "fix/npe")),
+             (2, 8), 13, None, " fi…"),
+            (SidebarRow("$1", None, "2:界界", git_status=GitStatus(("clean",), "main")),
+             (3, 0), 8, None, None),
+        ):
+            for italic, suffix in ((0, plain), (ITALIC, styled)):
+                with self.subTest(label=row.text, width=width, italic=bool(italic)):
+                    screen = Mock()
+                    screen.getmaxyx.return_value = (20, width)
+                    screen.getyx.return_value = end
+                    attribute = curses.A_BOLD | curses.A_REVERSE
+                    draw_row(screen, 2, row, attribute, {}, branch_italic=italic)
+                    self.assertTrue(screen.addnstr.call_args_list[0].args[2].endswith(row.text))
+                    self.assertEqual(screen.addnstr.call_args_list[0].args[4], attribute)
+                    if suffix is None:
+                        screen.addstr.assert_not_called()
+                    else:
+                        screen.addstr.assert_called_once_with(2, end[1], suffix,
+                                                              curses.A_DIM | curses.A_REVERSE | italic)
 
     def test_workspace_label_is_not_treated_as_a_branch(self):
         with patch("workmux.sidebar.draw_text") as draw:
@@ -95,7 +140,7 @@ class SidebarLoopTests(unittest.TestCase):
                                         for index in range(20)]
         tmux.sidebar_snapshot.side_effect = lambda: SimpleNamespace(
             workspaces=tmux.workspaces.return_value, activity=ActivitySnapshot(list(tabs), None, {}),
-            checkout_windows=windows or {}, checkouts=checkouts or {}, git_states={},
+            checkout_windows=windows or {}, checkouts=checkouts or {}, git_statuses={},
             previous_sessions=dict(previous_sessions or {}),
         )
         screen = Mock()
@@ -118,7 +163,7 @@ class SidebarLoopTests(unittest.TestCase):
 
         screen.getch.side_effect = getch
 
-        def draw(screen, y, row, attr, colors, *, workspace_marker, working_resting):
+        def draw(screen, y, row, attr, colors, *, workspace_marker, working_resting, branch_italic):
             drawn.append((row.key, attr))
             if markers is not None and workspace_marker != ' ':
                 markers.append((len(frames), row.key, workspace_marker))
@@ -131,6 +176,7 @@ class SidebarLoopTests(unittest.TestCase):
             stack.enter_context(patch("workmux.sidebar.curses.BUTTON4_PRESSED", 64, create=True))
             stack.enter_context(patch("workmux.sidebar.curses.BUTTON5_PRESSED", 128, create=True))
             stack.enter_context(patch("workmux.sidebar.status_attributes", return_value={}))
+            stack.enter_context(patch("workmux.sidebar._italic_attribute", return_value=0))
             stack.enter_context(patch("workmux.sidebar.time.monotonic", side_effect=lambda: now))
             stack.enter_context(patch("workmux.sidebar.draw_row", side_effect=draw))
             state = stack.enter_context(patch("workmux.sidebar.SidebarState")).return_value

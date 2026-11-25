@@ -25,7 +25,7 @@ class SidebarSnapshot:
     activity: ActivitySnapshot = field(default_factory=lambda: ActivitySnapshot([], None, {}))
     checkout_windows: dict[tuple[str, str], str] = field(default_factory=dict)
     checkouts: dict[str, tuple[str, ...]] = field(default_factory=dict)
-    git_states: dict[str, GitStatus | None] = field(default_factory=dict)
+    git_statuses: dict[str, GitStatus | None] = field(default_factory=dict)
     previous_sessions: dict[str, str] = field(default_factory=dict)
 
 
@@ -35,11 +35,16 @@ def _rows(mapping):
 
 def _encode(snapshot: SidebarSnapshot) -> str:
     activity = snapshot.activity
+    # Keep the original state arrays readable by older sidebars sharing the cache.
+    git_states = {key: status.states if status is not None else None
+                  for key, status in snapshot.git_statuses.items()}
+    git_branches = {key: status.head for key, status in snapshot.git_statuses.items()
+                    if status is not None and status.head is not None}
     return json.dumps({"workspaces": [asdict(workspace) for workspace in snapshot.workspaces],
                        "tabs": [asdict(tab) for tab in activity.tabs], "publisher": activity.publisher,
                        "indicators": _rows(activity.indicators),
                        "checkout_windows": _rows(snapshot.checkout_windows),
-                       "checkouts": snapshot.checkouts, "git_states": snapshot.git_states,
+                       "checkouts": snapshot.checkouts, "git_states": git_states, "git_branches": git_branches,
                        "previous_sessions": snapshot.previous_sessions},
                       separators=(",", ":"))
 
@@ -50,13 +55,15 @@ def _tab(tab: dict) -> Tab:
 
 def _decode(contents: str) -> SidebarSnapshot:
     data = json.loads(contents)
+    git_branches = data.get("git_branches", {})
     return SidebarSnapshot(
         [Workspace(**workspace) for workspace in data["workspaces"]],
         ActivitySnapshot([_tab(tab) for tab in data["tabs"]], data["publisher"],
                          {(session, window): state for session, window, state in data["indicators"]}),
         {(session, path): window for session, path, window in data["checkout_windows"]},
         {session: tuple(paths) for session, paths in data["checkouts"].items()},
-        {path: tuple(states) if states is not None else None for path, states in data["git_states"].items()},
+        {key: GitStatus(tuple(states), git_branches.get(key)) if states is not None else None
+         for key, states in data["git_states"].items()},
         data.get("previous_sessions", {}),  # Older sidebars can still share this cache.
     )
 

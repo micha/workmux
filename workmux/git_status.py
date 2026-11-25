@@ -1,7 +1,8 @@
-"""Optional, local-only Git status checks for workspace directories."""
+"""Optional, local-only Git status checks for workspaces and checkouts."""
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+import re
 import subprocess
 import time
 
@@ -10,16 +11,28 @@ from .core import Workspace
 
 POLL_INTERVAL = 2.0
 PROBE_TIMEOUT = 2.0
-GitStatus = tuple[str, ...]
+_BRANCH_HEAD = b"# branch.head "
+_BRANCH_OID = b"# branch.oid "
+
+
+@dataclass(frozen=True)
+class GitStatus:
+    states: tuple[str, ...]
+    head: str | None = None  # Branch name, or an abbreviated commit ID when detached.
 
 
 def parse_status(output: bytes) -> GitStatus:
-    """Collect porcelain v2 states; filenames (including rename sources) stay opaque."""
+    """Collect porcelain v2 HEAD and states; filenames stay opaque."""
+    branch = oid = b""
     dirty = conflict = False
     ahead = behind = 0
     records = iter(output.split(b"\0"))
     for record in records:
-        if record.startswith(b"# branch.ab "):
+        if record.startswith(_BRANCH_HEAD):
+            branch = record[len(_BRANCH_HEAD):]
+        elif record.startswith(_BRANCH_OID):
+            oid = record[len(_BRANCH_OID):]
+        elif record.startswith(b"# branch.ab "):
             counts = record.split()
             ahead, behind = int(counts[2]), -int(counts[3])
         elif record.startswith(b"u "):
@@ -39,7 +52,11 @@ def parse_status(output: bytes) -> GitStatus:
         states.append("behind")
     elif ahead:
         states.append("ahead")
-    return tuple(states) or ("clean",)
+    if branch == b"(detached)":
+        head = oid[:7].decode("ascii") if re.fullmatch(rb"[0-9a-f]{40}(?:[0-9a-f]{24})?", oid) else None
+    else:
+        head = branch.decode("utf-8", "replace") or None
+    return GitStatus(tuple(states) or ("clean",), head)
 
 
 def probe_status(directory: str) -> GitStatus | None:

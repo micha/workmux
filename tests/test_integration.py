@@ -90,23 +90,30 @@ class TmuxIntegrationTests(unittest.TestCase):
     def test_sidebar_git_status_tracks_workspace_directory(self):
         directory = Path(self.temporary.name) / "repo space; $literal"
         directory.mkdir()
-        subprocess.run(["git", "init", "-b", "main", str(directory)], check=True,
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                       env=dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1"))
+        environment = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+
+        def git(*args):
+            subprocess.run(["git", "-C", str(directory), *args], check=True, env=environment,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        git("init", "-b", "main")
         session = self.tmux.new_workspace("git-project", str(directory))
         content = self.tmux.pane(session + ":")
         sidebar = next(pane for pane in self.tmux.panes(content.window) if pane.sidebar)
         self.attach(session)
 
-        def shows(symbol):
+        def shows(symbol, branch):
             output = self.tmux.run("capture-pane", "-p", "-t", sidebar.id)
-            return f"{symbol}›1:git-project" in output.splitlines()
+            label = f"{symbol}›1:git-project"
+            return any(line in (f"{label} {branch}", f"{label} ({branch})") for line in output.splitlines())
 
-        eventually(lambda: shows(" "), "clean workspace row did not appear with an empty gutter")
+        eventually(lambda: shows(" ", "main"), "clean workspace row did not show its branch")
+        git("symbolic-ref", "HEAD", "refs/heads/fix/npe")
+        eventually(lambda: shows(" ", "fix/npe"), "workspace branch did not refresh")
         (directory / "new file").write_text("untracked")
-        eventually(lambda: shows("~"), "untracked file did not add a Git gutter indicator")
+        eventually(lambda: shows("~", "fix/npe"), "untracked file did not add a Git gutter indicator")
         (directory / "new file").unlink()
-        eventually(lambda: shows(" "), "cleaning the repository did not clear the gutter")
+        eventually(lambda: shows(" ", "fix/npe"), "cleaning the repository did not clear the gutter")
         self.assertEqual(self.tmux.pane(content.id).id, content.id)
 
     @unittest.skipUnless(shutil.which("git"), "Git is optional")
@@ -174,8 +181,8 @@ class TmuxIntegrationTests(unittest.TestCase):
         environment = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1')
 
         def git(*args):
-            subprocess.run(['git', '-C', str(source), *args], env=environment, check=True,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            return subprocess.run(['git', '-C', str(source), *args], env=environment, check=True,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
 
         git('init', '-b', 'main')
         git('config', 'user.name', 'Workmux Test')
@@ -188,8 +195,16 @@ class TmuxIntegrationTests(unittest.TestCase):
         sidebar = next(pane for pane in self.tmux.panes(original.window) if pane.sidebar)
         self.attach(session)
         capture = lambda: self.tmux.run('capture-pane', '-p', '-t', sidebar.id)
-        eventually(lambda: "~ └ ⎇ api ' $;" in capture().splitlines(),
-                   'linked worktree was not discovered with its Git status', timeout=10)
+        def shows_checkout(head):
+            label = "~ └ ⎇ api ' $;"
+            return {f"{label} {head}", f"{label} ({head})"}.intersection(capture().splitlines())
+
+        eventually(lambda: shows_checkout('feature'),
+                   'linked worktree was not discovered with its branch and Git status', timeout=10)
+        self.assertIn(' ›1:job', capture().splitlines())
+        git('-C', str(linked), 'checkout', '--detach')
+        head = git('-C', str(linked), 'rev-parse', 'HEAD').decode().strip()[:7]
+        eventually(lambda: shows_checkout(head), 'detached worktree did not show its short commit ID')
         self.assertEqual(len(self.tmux.run('list-windows', '-t', session).splitlines()), 1)
         self.tmux.toggle_sidebar(original.id)
         self.tmux.run('send-keys', '-t', sidebar.id, 'Down', 'Enter')

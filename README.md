@@ -266,10 +266,17 @@ pushes, pull requests, or checkout cleanup.
 
 ### Git status
 
-Workspace and checkout rows show at most one Git symbol in the undimmed left
-gutter, for example `↑›1:workmux` for the current workspace. Workspace status uses
-the saved directory (the content pane directory when first enabled), not the
-shell's current directory.
+Workspace and checkout rows show the checked-out branch after a single space,
+for example `1:workmux` *main* or `└ ⎇ api` *feat/login*. A detached HEAD shows
+its seven-character commit ID instead. If the sidebar's terminal doesn't
+advertise italic support, it puts the suffix in parentheses. Non-Git directories
+show no suffix. In a narrow sidebar the suffix is shortened or hidden before the
+name is clipped.
+
+Rows also show at most one Git symbol in the undimmed left gutter, for example
+`↑›1:workmux` for the current workspace. Workspace Git information uses the saved
+directory (the content pane directory when first enabled), not the shell's current
+directory. Checkout rows use their own checkout directory.
 
 Color shows repository status: **red** for conflicts, otherwise **amber** for
 local changes (including staged or untracked files), otherwise **blue** for clean.

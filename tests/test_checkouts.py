@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 from workmux.checkouts import (CheckoutCache, POLL_INTERVAL, checkout_root, contains,
                               discover_checkouts, worktree_paths)
 from workmux.core import Tab, Workspace
-from workmux.git_status import GitStatusCache
+from workmux.git_status import GitStatus, GitStatusCache
 from workmux.sidebar import sidebar_rows
 
 
@@ -89,11 +89,14 @@ class CheckoutTests(unittest.TestCase):
             snapshot = cache.snapshot(workspaces, paths)
             self.assertEqual(snapshot, {'$1': None, '/job/repo': None, '/job/other': None})
             self.assertEqual(executor.return_value.submit.call_count, 2)
-            for entry in cache.entries.values():
-                entry.future.set_result(('dirty', 'ahead'))
+            api = GitStatus(('dirty', 'ahead'), 'feat/login')
+            ui = GitStatus(('dirty', 'ahead'), 'fix/npe')
+            cache.entries['/job/repo'].future.set_result(api)
+            cache.entries['/job/other'].future.set_result(ui)
             snapshot = cache.snapshot(workspaces, paths)
-            self.assertEqual(snapshot['$1'], snapshot['/job/repo'])
-            self.assertEqual(snapshot['/job/other'], ('dirty', 'ahead'))
+            self.assertEqual(snapshot['$1'], api)
+            self.assertEqual(snapshot['/job/repo'], api)
+            self.assertEqual(snapshot['/job/other'], ui)
             cache.snapshot(workspaces)
             self.assertEqual(set(cache.entries), {'/job/repo'})
             cache.close()
@@ -237,13 +240,14 @@ class CheckoutSidebarTests(unittest.TestCase):
         tabs = [Tab('$1', '@1', 1, 'coordinate', 'working', '%1', ('/job',)),
                 Tab('$1', '@2', 2, 'implement', 'working', '%2', (api + '/src',)),
                 Tab('$1', '@3', 3, 'review', 'attention', '%3', (ui,))]
-        rows = sidebar_rows([self.workspace], tabs, {api: ('dirty', 'ahead'), ui: ('clean',)},
-                            self.checkouts, {('$1', api): '@7'})
+        statuses = {api: GitStatus(('dirty', 'ahead'), 'feat/login'), ui: GitStatus(('clean',))}
+        rows = sidebar_rows([self.workspace], tabs, statuses, self.checkouts, {('$1', api): '@7'})
         self.assertEqual([row.text for row in rows], [
             '1:job', '├ ⎇ api', '├ ⎇ ui', '├ ✦ 1:coordinate',
             '├ ✦ 2:implement', '└ ✦ 3:review'])
-        self.assertEqual(rows[1].git_states, ('dirty', 'ahead'))
-        self.assertEqual(rows[2].git_states, ('clean',))
+        self.assertIsNone(rows[0].git_status)
+        self.assertEqual(rows[1].git_status, statuses[api])
+        self.assertEqual(rows[2].git_status, statuses[ui])
         self.assertEqual(rows[1].key, ('$1', 'checkout:' + api))
         self.assertEqual(rows[1].window, '@7')
         self.assertEqual(rows[4].key, ('$1', '%2'))

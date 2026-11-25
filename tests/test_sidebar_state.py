@@ -12,7 +12,20 @@ from pathlib import Path
 from unittest.mock import patch
 
 from workmux.core import Tmux
-from workmux.sidebar_state import SidebarState
+from workmux.git_status import GitStatus
+from workmux.sidebar_state import SidebarSnapshot, SidebarState, _decode, _encode
+
+
+class SnapshotEncodingTests(unittest.TestCase):
+    def test_branch_metadata_is_compatible_with_older_sidebars(self):
+        snapshot = SidebarSnapshot(git_statuses={
+            "$1": GitStatus(("dirty",), "main"), "/checkout": GitStatus(("clean",)), "$2": None,
+        })
+        data = json.loads(_encode(snapshot))
+        self.assertEqual(data["git_states"], {"$1": ["dirty"], "/checkout": ["clean"], "$2": None})
+        self.assertEqual(data.pop("git_branches"), {"$1": "main"})
+        self.assertEqual(_decode(json.dumps(data)).git_statuses,
+                         {"$1": GitStatus(("dirty",)), "/checkout": GitStatus(("clean",)), "$2": None})
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux is required for integration tests")
@@ -85,11 +98,14 @@ class SidebarSnapshotTests(unittest.TestCase):
         self.addCleanup(other.run, "kill-server", missing_ok=True)
         self.managed(other, "unrelated", directory)
         isolated = self.state(other)
+        statuses = {str(directory): GitStatus(("dirty",), "main"),
+                    str(checkout): GitStatus(("dirty",), "feat/login")}
         with (patch.object(Tmux, "sidebar_snapshot", autospec=True,
                            side_effect=Tmux.sidebar_snapshot) as tmux_poll,
               patch("workmux.checkouts.discover_checkouts", return_value=(str(checkout),)) as scan,
-              patch("workmux.git_status.probe_status", return_value=("dirty",)) as git_probe):
-            expected = {first: ("dirty",), second: ("dirty",), str(checkout): ("dirty",)}
+              patch("workmux.git_status.probe_status", side_effect=statuses.__getitem__) as git_probe):
+            expected = {first: statuses[str(directory)], second: statuses[str(directory)],
+                        str(checkout): statuses[str(checkout)]}
             for _ in range(100):
                 snapshot = leader.snapshot()
                 count = tmux_poll.call_count
@@ -97,10 +113,10 @@ class SidebarSnapshotTests(unittest.TestCase):
                 self.assertEqual(received, snapshot)
                 self.assertIs(follower.snapshot(), received)
                 self.assertEqual(tmux_poll.call_count, count)
-                if snapshot.git_states == expected:
+                if snapshot.git_statuses == expected:
                     break
                 time.sleep(0.01)
-            self.assertEqual(snapshot.git_states, expected)
+            self.assertEqual(snapshot.git_statuses, expected)
             self.assertEqual(snapshot.activity.tabs[0].agents[0].roots, (str(directory),))
             self.assertEqual(snapshot.checkouts, {first: (str(checkout),), second: (str(checkout),)})
             self.assertEqual(snapshot.checkout_windows, {(first, str(checkout)): window})
@@ -118,7 +134,7 @@ class SidebarSnapshotTests(unittest.TestCase):
             # The new producer presents fresh tmux state while its async Git
             # and checkout caches warm up. A cold cache never removes a window.
             self.assertEqual(new_snapshot.checkouts, {first: (), second: ()})
-            self.assertEqual(new_snapshot.git_states, {first: None, second: None})
+            self.assertEqual(new_snapshot.git_statuses, {first: None, second: None})
             self.assertEqual(new_snapshot.checkout_windows, snapshot.checkout_windows)
             last_reader = self.state(self.tmux)
             count = tmux_poll.call_count
@@ -126,10 +142,10 @@ class SidebarSnapshotTests(unittest.TestCase):
             self.assertEqual(tmux_poll.call_count, count)
             for _ in range(100):
                 warmed = follower.snapshot()
-                if warmed.git_states == expected:
+                if warmed.git_statuses == expected:
                     break
                 time.sleep(0.01)
-            self.assertEqual(warmed.git_states, expected)
+            self.assertEqual(warmed.git_statuses, expected)
             self.assertEqual(warmed.checkouts, snapshot.checkouts)
             self.assertEqual(last_reader.snapshot(), warmed)
 

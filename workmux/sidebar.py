@@ -6,6 +6,7 @@ from math import ceil, floor
 from pathlib import Path
 import re
 import time
+from unicodedata import category, east_asian_width
 
 from .core import Tab, Tmux, WorkmuxError, Workspace
 from .git_status import GitStatus
@@ -38,7 +39,7 @@ class SidebarRow:
     window: str | None
     text: str
     state: str | None = None
-    git_states: GitStatus = ()
+    git_status: GitStatus | None = None
     directory: str | None = None
     pane: str | None = None
 
@@ -60,27 +61,26 @@ def _tab_label(tab: Tab) -> str:
     return f"{icon}{number}:{_label(tab.title or tab.name)}"
 
 
-def _git_indicator(states: GitStatus) -> tuple[str, str]:
+def _git_indicator(states: tuple[str, ...]) -> tuple[str, str]:
     health = "conflict" if "conflict" in states else "dirty" if "dirty" in states else "clean"
     symbol = next((GIT_DIVERGENCE[state] for state in states if state in GIT_DIVERGENCE), "")
     return symbol or ("~" if health != "clean" else ""), f"git-{health}"
 
 
 def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
-                 git_states: dict[str, GitStatus | None] | None = None,
+                 git_statuses: dict[str, GitStatus | None] | None = None,
                  checkouts: dict[str, tuple[str, ...]] | None = None,
                  checkout_windows: dict[tuple[str, str], str] | None = None) -> list[SidebarRow]:
     """Stable-ID tree of workspaces, discovered checkouts, and active/alert tabs."""
-    git_states, checkouts, checkout_windows = git_states or {}, checkouts or {}, checkout_windows or {}
+    git_statuses, checkouts, checkout_windows = git_statuses or {}, checkouts or {}, checkout_windows or {}
     children = {}
     for tab in tabs:
         if tab.state in SIDEBAR_INDICATORS:
             children.setdefault(tab.session, []).append(tab)
     rows = []
     for position, workspace in enumerate(workspaces, 1):
-        states = git_states.get(workspace.id) or ()
-        rows.append(SidebarRow(workspace.id, None,
-                               f"{position}:{_label(workspace.name)}", git_states=states))
+        rows.append(SidebarRow(workspace.id, None, f"{position}:{_label(workspace.name)}",
+                               git_status=git_statuses.get(workspace.id)))
         directories = tuple(sorted(set(checkouts.get(workspace.id, ()))))
         entries = [agent for tab in sorted(children.get(workspace.id, []), key=lambda tab: tab.index)
                    for agent in tab.agents or (tab,)]
@@ -89,11 +89,9 @@ def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
             last = index == total - 1
             branch = "└" if last else "├"
             name = Path(directory).name
-            states = git_states.get(directory) or ()
             window = checkout_windows.get((workspace.id, directory))
-            rows.append(SidebarRow(workspace.id, window,
-                                   f"{branch} ⎇ {_label(name)}",
-                                   git_states=states, directory=directory))
+            rows.append(SidebarRow(workspace.id, window, f"{branch} ⎇ {_label(name)}",
+                                   git_status=git_statuses.get(directory), directory=directory))
         for index, tab in enumerate(entries):
             branch = "└" if index == len(entries) - 1 else "├"
             text = f"{branch} {_tab_label(tab)}"
@@ -142,6 +140,12 @@ def status_attributes() -> dict[str, int]:
         return {}
 
 
+def _italic_attribute() -> int:
+    """Use italics only when both curses and the pane's terminfo support them."""
+    italic = getattr(curses, "A_ITALIC", 0)
+    return italic & curses.termattrs() if italic else 0
+
+
 def draw_text(screen, row: int, text: str, attribute: int = 0, *, x: int = 0,
               max_width: int | None = None) -> None:
     height, width = screen.getmaxyx()
@@ -167,15 +171,47 @@ def _heart_pulse(now: float) -> tuple[bool, float]:
     return False, start + HEART_PERIOD_SECONDS
 
 
+def _git_head_suffix(head: str, width: int, *, italic: bool) -> str:
+    """Fit the branch or short commit ID into the remaining columns, or omit it."""
+    before, after = (" ", "") if italic else (" (", ")")
+    available = width - len(before) - len(after)
+    if available < 1:
+        return ""
+    head = _label(head)
+    used = prefix = 0
+    for index, char in enumerate(head):
+        if category(char) not in ("Mn", "Me", "Cf"):
+            used += 2 if east_asian_width(char) in ("W", "F") else 1
+        if used > available:
+            if not prefix:
+                return ""
+            head = head[:prefix] + "…"
+            break
+        if used < available:  # Keep a column for the ellipsis if the full name won't fit.
+            prefix = index + 1
+    return f"{before}{head}{after}"
+
+
 def draw_row(screen, position: int, row: SidebarRow, attribute: int,
-             colors: dict[str, int], *, workspace_marker: str = " ", working_resting: bool = False) -> None:
-    """Draw status and navigation marks independently of workspace dimming."""
+             colors: dict[str, int], *, workspace_marker: str = " ", working_resting: bool = False,
+             branch_italic: int = 0) -> None:
+    """Draw labels, status, and navigation marks with their own attributes."""
     state = row.state or ""
     indicator = SIDEBAR_INDICATORS.get(state, "")
     color = state
-    if not indicator:
-        indicator, color = _git_indicator(row.git_states)
+    if not indicator and row.git_status:
+        indicator, color = _git_indicator(row.git_status.states)
     draw_text(screen, position, f"{indicator or ' '}{workspace_marker}{row.text}", attribute)
+    if row.git_status and row.git_status.head:
+        y, x = screen.getyx()  # curses measures the name's width, including wide and combining characters.
+        if y == position:
+            _, width = screen.getmaxyx()
+            suffix = _git_head_suffix(row.git_status.head, width - x - 1, italic=bool(branch_italic))
+            if suffix:
+                try:
+                    screen.addstr(y, x, suffix, (attribute & ~curses.A_BOLD) | curses.A_DIM | branch_italic)
+                except curses.error:
+                    pass
     if workspace_marker != " " and attribute & curses.A_DIM:
         draw_text(screen, position, workspace_marker, attribute & ~curses.A_DIM, x=1, max_width=2)
     if (row.window is not None or row.directory is not None) and row.text.startswith(("├", "└")):
@@ -203,6 +239,7 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                          getattr(curses, "BUTTON4_PRESSED", 0) |
                          getattr(curses, "BUTTON5_PRESSED", 0))
         colors = status_attributes()
+        branch_italic = _italic_attribute()
         selected_key = None
         offset = 0
         follow_selection = True
@@ -234,7 +271,7 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                     if updated is not snapshot:
                         snapshot = updated
                         indicators.update(snapshot.activity)
-                        inputs = (snapshot.workspaces, snapshot.activity.tabs, snapshot.git_states,
+                        inputs = (snapshot.workspaces, snapshot.activity.tabs, snapshot.git_statuses,
                                   snapshot.checkouts, snapshot.checkout_windows)
                         if inputs != row_inputs:
                             row_inputs = inputs
@@ -305,8 +342,8 @@ def run_sidebar(tmux: Tmux, pane_id: str) -> None:
                     marker = " "
                     if workspace:
                         marker = "›" if current else "-" if row.session == previous_session else " "
-                    draw_row(screen, position + 1, row, attribute, colors,
-                             workspace_marker=marker, working_resting=working_resting)
+                    draw_row(screen, position + 1, row, attribute, colors, workspace_marker=marker,
+                             working_resting=working_resting, branch_italic=branch_italic)
                 draw_text(screen, height - 2, message or "Enter: select  q: back", curses.A_DIM)
                 screen.refresh()
                 displayed = view
