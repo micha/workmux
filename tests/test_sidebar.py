@@ -8,8 +8,8 @@ from unittest.mock import Mock, patch
 
 from workmux.core import ActivitySnapshot, Pane, Tab, Workspace
 from workmux.git_status import GitStatus
-from workmux.sidebar import (SidebarRow, _heart_pulse, _italic_attribute, draw_row, mouse_wheel_delta,
-                             run_sidebar, scroll_offset)
+from workmux.sidebar import (SidebarRow, _heart_pulse, _italic_attribute, draw_row, draw_text,
+                             mouse_wheel_delta, run_sidebar, scroll_offset)
 
 ITALIC = 1 << 31
 
@@ -58,12 +58,13 @@ class TreeRenderingTests(unittest.TestCase):
                 for window, directory in (("@1", None), (None, "/jobs/repo")):
                     with self.subTest(branch=branch, attribute=attribute, directory=directory):
                         row = SidebarRow("$0", window, f"{branch} label", directory=directory)
-                        with patch("workmux.sidebar.draw_text") as draw:
-                            draw_row(Mock(), 2, row, attribute, {})
-                        self.assertEqual(draw.call_args_list[0].args[3], attribute)
-                        self.assertEqual(draw.call_args_list[1].args[2:],
-                                         (branch, attribute | curses.A_DIM))
-                        self.assertEqual(draw.call_args_list[1].kwargs, {"x": 2, "max_width": 2})
+                        screen = Mock()
+                        screen.getmaxyx.return_value = (20, 80)
+                        draw_row(screen, 2, row, attribute, {})
+                        self.assertEqual([call.args for call in screen.addstr.call_args_list], [
+                            (2, 0, f"  {row.text}", attribute),
+                            (2, 2, branch, attribute | curses.A_DIM),
+                        ])
 
     def test_previous_marker_is_undimmed_in_the_spacer_beside_git_status(self):
         screen = Mock()
@@ -71,11 +72,42 @@ class TreeRenderingTests(unittest.TestCase):
         row = SidebarRow("$1", None, "2:repo", git_status=GitStatus(("dirty", "ahead")))
         draw_row(screen, 2, row, curses.A_DIM | curses.A_REVERSE, {"git-dirty": 256},
                  workspace_marker="-")
-        self.assertEqual([call.args for call in screen.addnstr.call_args_list], [
-            (2, 0, "↑-2:repo", 79, curses.A_DIM | curses.A_REVERSE),
-            (2, 1, "-", 1, curses.A_REVERSE),
-            (2, 0, "↑", 1, curses.A_REVERSE | 256),
+        self.assertEqual([call.args for call in screen.addstr.call_args_list], [
+            (2, 0, "↑-2:repo", curses.A_DIM | curses.A_REVERSE),
+            (2, 1, "-", curses.A_REVERSE),
+            (2, 0, "↑", curses.A_REVERSE | 256),
         ])
+
+    def test_long_labels_end_with_ellipsis_on_every_row_type(self):
+        git = GitStatus(("clean",), "feature")
+        for row, expected in (
+            (SidebarRow("$1", None, "1:workspace-long", git_status=git), "  1:workspace-…"),
+            (SidebarRow("$1", None, "├ ⎇ checkout-long", directory="/job/checkout-long",
+                        git_status=git), "  ├ ⎇ checkout…"),
+            (SidebarRow("$1", "@2", "├ ✦ 2:agent-long", "working"), "♥ ├ ✦ 2:agent-…"),
+            (SidebarRow("$1", "@3", "└ 3:long-alert", "alert"), "▲ └ 3:long-ale…"),
+        ):
+            with self.subTest(label=row.text):
+                screen = Mock()
+                screen.getmaxyx.return_value = (20, 16)
+                draw_row(screen, 2, row, curses.A_REVERSE, {}, branch_italic=ITALIC)
+                self.assertEqual(screen.addstr.call_args_list[0].args, (2, 0, expected, curses.A_REVERSE))
+                screen.getyx.assert_not_called()  # A truncated name takes priority over the Git suffix.
+
+    def test_text_ellipsis_counts_columns_and_keeps_combining_marks(self):
+        for text, width, expected in (
+            ("界e\u0301x", 5, "界e\u0301x"),
+            ("e\u0301界abc", 5, "e\u0301界…"),
+            ("ab界cd", 5, "ab…"),
+            ("e\u0301a\u0301b\u0301c\u0301", 5, "e\u0301a\u0301b\u0301c\u0301"),
+            ("Enter: select  q: back", 16, "Enter: select …"),
+            ("Error:\nlong message", 12, "Error: lon…"),
+        ):
+            with self.subTest(text=text):
+                screen = Mock()
+                screen.getmaxyx.return_value = (20, width)
+                draw_text(screen, 2, text)
+                screen.addstr.assert_called_once_with(2, 0, expected, 0)
 
     def test_italics_require_both_curses_and_terminfo_support(self):
         with patch("workmux.sidebar.curses", Mock(spec=["termattrs"])):
@@ -100,8 +132,6 @@ class TreeRenderingTests(unittest.TestCase):
              (2, 8), 36, " (feat )", " feat "),
             (SidebarRow("$1", None, "2:repo", git_status=GitStatus(("clean",), "fix/npe")),
              (2, 8), 13, None, " fi…"),
-            (SidebarRow("$1", None, "2:界界", git_status=GitStatus(("clean",), "main")),
-             (3, 0), 8, None, None),
         ):
             for italic, suffix in ((0, plain), (ITALIC, styled)):
                 with self.subTest(label=row.text, width=width, italic=bool(italic)):
@@ -110,13 +140,14 @@ class TreeRenderingTests(unittest.TestCase):
                     screen.getyx.return_value = end
                     attribute = curses.A_BOLD | curses.A_REVERSE
                     draw_row(screen, 2, row, attribute, {}, branch_italic=italic)
-                    self.assertTrue(screen.addnstr.call_args_list[0].args[2].endswith(row.text))
-                    self.assertEqual(screen.addnstr.call_args_list[0].args[4], attribute)
-                    if suffix is None:
-                        screen.addstr.assert_not_called()
-                    else:
-                        screen.addstr.assert_called_once_with(2, end[1], suffix,
-                                                              curses.A_DIM | curses.A_REVERSE | italic)
+                    indicator = "~" if row.directory else " "
+                    self.assertEqual(screen.addstr.call_args_list[0].args,
+                                     (2, 0, f"{indicator} {row.text}", attribute))
+                    suffix_calls = [call.args for call in screen.addstr.call_args_list[1:]
+                                    if call.args[1] == end[1]]
+                    self.assertEqual(suffix_calls, [] if suffix is None else [
+                        (2, end[1], suffix, curses.A_DIM | curses.A_REVERSE | italic),
+                    ])
 
     def test_workspace_label_is_not_treated_as_a_branch(self):
         with patch("workmux.sidebar.draw_text") as draw:

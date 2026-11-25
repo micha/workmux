@@ -146,19 +146,31 @@ def _italic_attribute() -> int:
     return italic & curses.termattrs() if italic else 0
 
 
-def draw_text(screen, row: int, text: str, attribute: int = 0, *, x: int = 0,
-              max_width: int | None = None) -> None:
+def _ellipsize(text: str, width: int) -> str:
+    """Fit text by terminal columns, keeping combining marks with the prefix."""
+    used = prefix = 0
+    for index, char in enumerate(text):
+        if category(char) not in ("Mn", "Me", "Cf"):
+            used += 2 if east_asian_width(char) in ("W", "F") else 1
+        if used > width:
+            return text[:prefix] + "…"
+        if used < width:  # Reserve a cell for the ellipsis in case of overflow.
+            prefix = index + 1
+    return text
+
+
+def draw_text(screen, row: int, text: str, attribute: int = 0, *, x: int = 0) -> str:
+    """Draw one line and return the text that was drawn."""
     height, width = screen.getmaxyx()
-    width -= x
-    if max_width is not None:
-        width = min(width, max_width)
-    if not 0 <= row < height or x < 0 or width < 2:
-        return
-    # Avoid writing the bottom-right cell, where curses may raise after drawing.
+    available = width - x - 1  # Leave the last column free to avoid wrapping.
+    if not 0 <= row < height or x < 0 or available < 1:
+        return ""
+    text = _ellipsize(_label(text), available)
     try:
-        screen.addnstr(row, x, text, width - 1, attribute)
+        screen.addstr(row, x, text, attribute)
     except curses.error:
-        pass  # Wide window-name glyphs can hit the edge before the character limit.
+        return ""
+    return text
 
 
 def _heart_pulse(now: float) -> tuple[bool, float]:
@@ -178,18 +190,8 @@ def _git_head_suffix(head: str, width: int, *, italic: bool) -> str:
     if available < 1:
         return ""
     head = _label(head)
-    used = prefix = 0
-    for index, char in enumerate(head):
-        if category(char) not in ("Mn", "Me", "Cf"):
-            used += 2 if east_asian_width(char) in ("W", "F") else 1
-        if used > available:
-            if not prefix:
-                return ""
-            head = head[:prefix] + "…"
-            break
-        if used < available:  # Keep a column for the ellipsis if the full name won't fit.
-            prefix = index + 1
-    return f"{before}{head}{after}"
+    fitted = _ellipsize(head, available)
+    return "" if fitted == "…" and fitted != head else f"{before}{fitted}{after}"
 
 
 def draw_row(screen, position: int, row: SidebarRow, attribute: int,
@@ -201,8 +203,9 @@ def draw_row(screen, position: int, row: SidebarRow, attribute: int,
     color = state
     if not indicator and row.git_status:
         indicator, color = _git_indicator(row.git_status.states)
-    draw_text(screen, position, f"{indicator or ' '}{workspace_marker}{row.text}", attribute)
-    if row.git_status and row.git_status.head:
+    label = f"{indicator or ' '}{workspace_marker}{row.text}"
+    drawn = draw_text(screen, position, label, attribute)
+    if drawn == label and row.git_status and row.git_status.head:
         y, x = screen.getyx()  # curses measures the name's width, including wide and combining characters.
         if y == position:
             _, width = screen.getmaxyx()
@@ -212,17 +215,18 @@ def draw_row(screen, position: int, row: SidebarRow, attribute: int,
                     screen.addstr(y, x, suffix, (attribute & ~curses.A_BOLD) | curses.A_DIM | branch_italic)
                 except curses.error:
                     pass
-    if workspace_marker != " " and attribute & curses.A_DIM:
-        draw_text(screen, position, workspace_marker, attribute & ~curses.A_DIM, x=1, max_width=2)
-    if (row.window is not None or row.directory is not None) and row.text.startswith(("├", "└")):
-        draw_text(screen, position, row.text[0], attribute | curses.A_DIM, x=2, max_width=2)
-    if indicator:
+    # Restyle surviving marks without overwriting the ellipsis in very narrow panes.
+    if workspace_marker != " " and drawn[1:2] == workspace_marker and attribute & curses.A_DIM:
+        draw_text(screen, position, workspace_marker, attribute & ~curses.A_DIM, x=1)
+    if (row.window is not None or row.directory is not None) and drawn[2:3] in ("├", "└"):
+        draw_text(screen, position, drawn[2], attribute | curses.A_DIM, x=2)
+    if indicator and drawn[:1] == indicator:
         gutter = (attribute & ~curses.A_DIM) | colors.get(color, 0)
         if state == "working":
             gutter &= ~curses.A_BOLD
             if working_resting:
                 gutter |= curses.A_DIM
-        draw_text(screen, position, indicator, gutter, max_width=2)
+        draw_text(screen, position, indicator, gutter)
 
 
 def run_sidebar(tmux: Tmux, pane_id: str) -> None:

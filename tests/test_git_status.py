@@ -223,9 +223,9 @@ class GitSidebarTests(unittest.TestCase):
                     screen.getmaxyx.return_value = (20, 80)
                     row = sidebar_rows([workspace], [], {"$1": GitStatus(health + divergence)})[0]
                     draw_row(screen, 2, row, attribute, colors)
-                    self.assertEqual([call.args for call in screen.addnstr.call_args_list], [
-                        (2, 0, f"{symbol} 1:~↑↓↕界e\u0301", 79, attribute),
-                        (2, 0, symbol, 1, curses.A_REVERSE | color),
+                    self.assertEqual([call.args for call in screen.addstr.call_args_list], [
+                        (2, 0, f"{symbol} 1:~↑↓↕界e\u0301", attribute),
+                        (2, 0, symbol, curses.A_REVERSE | color),
                     ])
 
     def test_no_symbol_for_clean_in_sync_or_unavailable(self):
@@ -236,20 +236,17 @@ class GitSidebarTests(unittest.TestCase):
                 screen.getmaxyx.return_value = (20, 80)
                 row = sidebar_rows([workspace], [], {"$1": status})[0]
                 draw_row(screen, 2, row, curses.A_BOLD, {"git-clean": 256})
-                screen.addnstr.assert_called_once_with(2, 0, "  1:repo", 79, curses.A_BOLD)
-                screen.addstr.assert_not_called()
+                screen.addstr.assert_called_once_with(2, 0, "  1:repo", curses.A_BOLD)
 
     def test_checkout_symbol_stays_bright_without_color_in_a_narrow_sidebar(self):
         screen = Mock()
         screen.getmaxyx.return_value = (20, 4)
         workspace = Workspace("$1", "job", "", "/job")
-        screen.getyx.return_value = (2, 3)
         row = sidebar_rows([workspace], [], {"/job/repo": GitStatus(("dirty", "ahead"), "fix/npe")},
                            {"$1": ("/job/repo",)})[1]
         draw_row(screen, 2, row, curses.A_DIM, {})
-        self.assertEqual([call.args for call in screen.addnstr.call_args_list], [
-            (2, 0, "↑ └ ⎇ repo", 3, curses.A_DIM),
-            (2, 2, "└", 1, curses.A_DIM),
-            (2, 0, "↑", 1, 0),
+        self.assertEqual([call.args for call in screen.addstr.call_args_list], [
+            (2, 0, "↑ …", curses.A_DIM),
+            (2, 0, "↑", 0),
         ])
-        screen.addstr.assert_not_called()
+        screen.getyx.assert_not_called()

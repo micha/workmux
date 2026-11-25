@@ -271,7 +271,7 @@ for example `1:workmux` *main* or `└ ⎇ api` *feat/login*. A detached HEAD sh
 its seven-character commit ID instead. If the sidebar's terminal doesn't
 advertise italic support, it puts the suffix in parentheses. Non-Git directories
 show no suffix. In a narrow sidebar the suffix is shortened or hidden before the
-name is clipped.
+name is truncated.
 
 Rows also show at most one Git symbol in the undimmed left gutter, for example
 `↑›1:workmux` for the current workspace. Workspace Git information uses the saved
@@ -643,7 +643,8 @@ changing `status-interval`, even when it is zero.
   restoring them from disk is not supported.
 
 Sidebars default to 36 columns and shrink in narrow windows; use a terminal at
-least 40 columns wide. To change the preferred width at runtime:
+least 40 columns wide. Truncated sidebar lines use `…`. To change the preferred
+width at runtime:
 
 ```sh
 tmux set-option -g @workmux-sidebar-width 30

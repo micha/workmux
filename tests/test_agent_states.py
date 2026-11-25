@@ -276,10 +276,10 @@ class SidebarTreeTests(unittest.TestCase):
                     screen.getmaxyx.return_value = (20, 80)
                     draw_row(screen, 2, row, attribute, {"working": 256}, working_resting=resting)
                     gutter = (attribute & curses.A_REVERSE) | 256 | (curses.A_DIM if resting else 0)
-                    self.assertEqual([call.args for call in screen.addnstr.call_args_list], [
-                        (2, 0, "♥ └ ✦ 1:build", 79, attribute),
-                        (2, 2, "└", 1, attribute | curses.A_DIM),
-                        (2, 0, "♥", 1, gutter),
+                    self.assertEqual([call.args for call in screen.addstr.call_args_list], [
+                        (2, 0, "♥ └ ✦ 1:build", attribute),
+                        (2, 2, "└", attribute | curses.A_DIM),
+                        (2, 0, "♥", gutter),
                     ])
 
     def test_agent_status_uses_gutter_without_changing_title_or_spark(self):
@@ -293,11 +293,11 @@ class SidebarTreeTests(unittest.TestCase):
                     row = SidebarRow('$1', '@1', text, state, pane='%7')
                     draw_row(screen, 2, row, curses.A_REVERSE | curses.A_DIM,
                              {state: 256}, working_resting=True)
-                    self.assertEqual(screen.addnstr.call_args_list[0].args,
-                                     (2, 0, f'{indicator} {text}', 79, curses.A_REVERSE | curses.A_DIM))
+                    self.assertEqual(screen.addstr.call_args_list[0].args,
+                                     (2, 0, f'{indicator} {text}', curses.A_REVERSE | curses.A_DIM))
                     gutter = curses.A_REVERSE | 256 | (curses.A_DIM if state == 'working' else 0)
-                    self.assertEqual(screen.addnstr.call_args_list[-1].args, (2, 0, indicator, 1, gutter))
-                    self.assertEqual(screen.addnstr.call_count, 3 if prefix == '└' else 2)
+                    self.assertEqual(screen.addstr.call_args_list[-1].args, (2, 0, indicator, gutter))
+                    self.assertEqual(screen.addstr.call_count, 3 if prefix == '└' else 2)
 
     def test_native_alert_is_undimmed_in_the_gutter_with_or_without_color(self):
         for attr in (curses.A_BOLD, curses.A_REVERSE | curses.A_DIM):
@@ -307,10 +307,10 @@ class SidebarTreeTests(unittest.TestCase):
                     screen.getmaxyx.return_value = (20, 80)
                     row = SidebarRow("$1", "@1", "└ 1:logs ▲ in title", "alert")
                     draw_row(screen, 2, row, attr, colors)
-                    self.assertEqual([call.args for call in screen.addnstr.call_args_list], [
-                        (2, 0, "▲ └ 1:logs ▲ in title", 79, attr),
-                        (2, 2, "└", 1, attr | curses.A_DIM),
-                        (2, 0, "▲", 1, (attr & ~curses.A_DIM) | colors.get("alert", 0)),
+                    self.assertEqual([call.args for call in screen.addstr.call_args_list], [
+                        (2, 0, "▲ └ 1:logs ▲ in title", attr),
+                        (2, 2, "└", attr | curses.A_DIM),
+                        (2, 0, "▲", (attr & ~curses.A_DIM) | colors.get("alert", 0)),
                     ])
 
     def test_idle_tabs_are_hidden_and_children_are_in_window_order(self):
