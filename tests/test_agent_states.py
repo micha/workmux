@@ -259,12 +259,12 @@ class SidebarTreeTests(unittest.TestCase):
                 colors = status_attributes()
 
                 self.assertEqual(colors, {"working": 256, "attention": 512,
-                                          "finished": 768, "other": 1024,
+                                          "finished": 768, "alert": 1024,
                                           "git-clean": 1280, "git-dirty": 1536,
                                           "git-conflict": 1792})
                 self.assertEqual([call.args[1] for call in init_pair.call_args_list],
                                  [curses.COLOR_RED, curses.COLOR_RED,
-                                  curses.COLOR_GREEN, curses.COLOR_YELLOW,
+                                  curses.COLOR_GREEN, amber,
                                   curses.COLOR_BLUE, amber, curses.COLOR_RED])
 
     def test_only_the_filled_heart_dims_between_beats(self):
@@ -283,13 +283,13 @@ class SidebarTreeTests(unittest.TestCase):
                     ])
 
     def test_agent_status_uses_gutter_without_changing_title_or_spark(self):
-        for state, indicator in (('working', '♥'), ('attention', '⚠'), ('finished', '✓')):
+        for state, indicator in (('working', '♥'), ('attention', '▲'), ('finished', '▲')):
             for prefix in ('└', '│  └', '   └'):
                 with self.subTest(state=state, prefix=prefix):
                     screen = Mock()
                     screen.getmaxyx.return_value = (20, 80)
                     # A title containing status symbols must be rendered verbatim.
-                    text = f'{prefix} ✦ 2.1:♥ ⚠ ✓ title'
+                    text = f'{prefix} ✦ 2.1:♥ ▲ title'
                     row = SidebarRow('$1', '@1', text, state, pane='%7')
                     draw_row(screen, 2, row, curses.A_REVERSE | curses.A_DIM,
                              {state: 256}, working_resting=True)
@@ -301,16 +301,16 @@ class SidebarTreeTests(unittest.TestCase):
 
     def test_native_alert_is_undimmed_in_the_gutter_with_or_without_color(self):
         for attr in (curses.A_BOLD, curses.A_REVERSE | curses.A_DIM):
-            for colors in ({}, {"other": 1024}):
+            for colors in ({}, {"alert": 1024}):
                 with self.subTest(attr=attr, colors=colors):
                     screen = Mock()
                     screen.getmaxyx.return_value = (20, 80)
-                    row = SidebarRow("$1", "@1", "└ 1:logs ◆ in title", "alert")
+                    row = SidebarRow("$1", "@1", "└ 1:logs ▲ in title", "alert")
                     draw_row(screen, 2, row, attr, colors)
                     self.assertEqual([call.args for call in screen.addnstr.call_args_list], [
-                        (2, 0, "◆ └ 1:logs ◆ in title", 79, attr),
+                        (2, 0, "▲ └ 1:logs ▲ in title", 79, attr),
                         (2, 2, "└", 1, attr | curses.A_DIM),
-                        (2, 0, "◆", 1, (attr & ~curses.A_DIM) | colors.get("other", 0)),
+                        (2, 0, "▲", 1, (attr & ~curses.A_DIM) | colors.get("alert", 0)),
                     ])
 
     def test_idle_tabs_are_hidden_and_children_are_in_window_order(self):

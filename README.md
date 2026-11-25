@@ -218,7 +218,7 @@ basename. Checkouts and agents are direct children of the workspace:
   ├ ⎇ frontend
 ⣷ ├ ✦ 1.0:coordinate
 ⣷ ├ ✦ 2.0:implement
-⚠ └ ✦ 3.0:review
+▲ └ ✦ 3.0:review
 ```
 
 Checkout labels may repeat when directories share a basename; each row still
@@ -304,25 +304,26 @@ alongside checkouts:
 ```text
  ›1:project-a
 ♥ ├ ✦ 1.0:build
-⚠ └ ✦ 2.0:review
+▲ └ ✦ 2.0:review
   2:project-b
-✓ ├ ✦ 1.0:changes
-◆ └ 2:logs
+▲ ├ ✦ 1.0:changes
+▲ └ 2:logs
 ```
 
 | Indicator | Color | State |
 | --- | --- | --- |
 | `♥` | Red | Agent working |
-| `⚠` | Red | Agent needs attention: a blocking input dialog, error, or interruption |
-| `✓` | Green | Agent finished its run |
-| `◆` | Yellow | Other tmux alert: bell, monitored activity, or silence |
+| `▲` | Red | Agent needs attention: a blocking input dialog, error, or interruption |
+| `▲` | Green | Agent finished its run |
+| `▲` | Amber | Other tmux alert: bell, monitored activity, or silence |
 
 Agent status and native alert symbols occupy the left gutter and aren't dimmed
-by inactive workspaces. On terminals that support dim text, the red heart repeats
-a double beat every second: dim for 700 ms, bright for 100 ms, dim for 100 ms,
-bright for 100 ms. The `✦` identifies an agent row. Each active agent pane gets
-its own row, even when several share a tab. Selecting one focuses that pane,
-including in another workspace.
+by inactive workspaces. Amber falls back to yellow on basic color terminals.
+Without color support the triangles look the same. On terminals that support
+dim text, the red heart repeats a double beat every second: dim for 700 ms,
+bright for 100 ms, dim for 100 ms, bright for 100 ms. The `✦` identifies an
+agent row. Each active agent pane gets its own row, even when several share a
+tab. Selecting one focuses that pane, including in another workspace.
 
 Labels use `window.pane:title`, for example `2.1:build`, using the pane's terminal
 title or falling back to the tab name. Rows follow window-index order beneath
@@ -616,8 +617,10 @@ To show activity beside tab names, uncomment both window formats in the config
 example and adapt them to your styling. The guard leaves other sessions with the
 usual index, name, and flags; `enable` does not install these formats.
 The `@workmux-agent-indicator` window option contains a plain activity symbol,
-without colors or Git status, and is empty when idle. It uses the sidebar's
-priority and alert-clearing rules without changing window names.
+without colors or Git status, and is empty when idle. It uses distinct glyphs
+(`⚠` for attention, `✓` for finished, `◆` for other alerts) so the states remain
+readable without color. It follows the sidebar's priority and alert-clearing
+rules without changing window names.
 
 At least one sidebar must be running on the server. The tab bar shows a steady
 `♥` while an agent is working; only the sidebar pulses. This works without

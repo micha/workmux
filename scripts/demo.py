@@ -25,9 +25,9 @@ def repository(path: Path) -> None:
                     "commit", "-q", "--allow-empty", "-m", "Initial commit"], check=True)
 
 
-def display(tmux: Tmux, pane: str, title: str, lines: list[str], directory: Path) -> None:
+def display(tmux: Tmux, pane: str, title: str, lines: list[str], directory: Path, *, bell: bool = False) -> None:
     """Use a live, idle process instead of invoking any agent or external service."""
-    text = "\033[2J\033[H\033[?25l\n" + "\n".join(lines) + "\n"
+    text = "\033[2J\033[H\033[?25l\n" + "\n".join(lines) + "\n" + ("\a" if bell else "")
     program = "import signal,sys; sys.stdout.write(" + repr(text) + "); sys.stdout.flush(); signal.pause()"
     tmux.run("respawn-pane", "-k", "-t", pane, "-c", str(directory),
              shlex.join([sys.executable, "-c", program]))
@@ -97,8 +97,17 @@ def main() -> None:
                 display(tmux, content, "Docs · navigation", ["  Demo workspace"], base / name)
                 if name == "website":
                     tmux.report_agent_state(content, "working")
+            background = [(tmux.new_tab(primary, name), title, state) for name, title, state in (
+                ("review", "Pi · ready for review", "finished"),
+                ("plan", "Pi · awaiting input", "attention"),
+                ("logs", "Build logs", None),
+            )]
             tmux.run("select-window", "-t", primary)
             tmux.run("select-pane", "-t", primary)
+            for pane, title, state in background:
+                if state:
+                    tmux.report_agent_state(pane, state)
+                display(tmux, pane, title, [f"  {title}"], project / "main", bell=True)
             tmux.run("set-option", "-g", "status-style", "bg=default,fg=colour245")
             tmux.run("set-option", "-g", "window-status-current-style", "bold,fg=colour117,bg=colour236")
             tmux.run("set-option", "-g", "pane-border-style", "fg=colour238")

@@ -1656,18 +1656,20 @@ class TmuxIntegrationTests(unittest.TestCase):
         current = self.tmux.new_tab(pane, "current")
         sidebar = next(item for item in self.tmux.panes(self.tmux.pane(current).window) if item.sidebar)
         self.attach(session)
-        for state, indicators in (("working", ("♥",)), ("attention", ("⚠",)), ("finished", ("✓",))):
+        for state, symbol in (("working", "♥"), ("attention", "\x1b[31m▲"), ("finished", "\x1b[32m▲")):
             self.tmux.report_agent_state(pane, state, os.getpid())
             if state != "working":
                 self.tmux.run("send-keys", "-t", pane, "printf '\\a'", "Enter")
-            eventually(lambda: pane_contains_any(self.tmux, sidebar.id, indicators))
+            eventually(lambda: any(symbol in line and "✦" in line for line in
+                                   self.tmux.run("capture-pane", "-ep", "-t", sidebar.id).splitlines()),
+                       f"sidebar did not show the {state} indicator")
             tab = next(tab for tab in self.tmux.attention_tabs() if tab.id == window)
             self.assertEqual(tab.state, state)
             self.assertEqual(tab.pane, pane)
             self.assertEqual(tab.session, session)
         self.tmux.report_agent_state(pane, "idle")
         self.tmux.run("select-window", "-t", window)
-        eventually(lambda: not any(line.startswith('✓ ') for line in
+        eventually(lambda: not any(line.startswith('▲ ') for line in
                                    self.tmux.run("capture-pane", "-p", "-t", sidebar.id).splitlines()))
         self.assertFalse(any(tab.id == window for tab in self.tmux.attention_tabs()))
         with self.assertRaisesRegex(WorkmuxError, "sidebar"):
@@ -1821,7 +1823,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.run("send-keys", "-t", content.id, "printf '\\a'", "Enter")
         eventually(lambda: any(tab.id == content.window and tab.state == "alert"
                                for tab in self.tmux.attention_tabs()))
-        eventually(lambda: any(line.startswith("◆ └ ") for line in
+        eventually(lambda: any(line.startswith("▲ └ ") for line in
                                self.tmux.run("capture-pane", "-p", "-t", sidebar.id).splitlines()))
         # Child of the first workspace: pane row 2, plus the top status line.
         os.write(master, b"\x1b[<0;3;4M\x1b[<0;3;4m")
@@ -1837,7 +1839,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.run("send-keys", "-t", content.id, "printf '\\a'", "Enter")
         eventually(lambda: any(tab.id == content.window and tab.state == "alert"
                                for tab in self.tmux.attention_tabs()))
-        eventually(lambda: any(line.startswith("◆ └ ") for line in
+        eventually(lambda: any(line.startswith("▲ └ ") for line in
                                self.tmux.run("capture-pane", "-p", "-t", sidebar.id).splitlines()),
                    "native alert did not appear in the gutter of the inactive workspace")
 
@@ -1847,16 +1849,17 @@ class TmuxIntegrationTests(unittest.TestCase):
         window = self.tmux.pane(current).window
         sidebar = next(item for item in self.tmux.panes(window) if item.sidebar)
         master, _, _ = self.attach(session)
-        for state, indicator in (("attention", "⚠"), ("finished", "✓")):
+        for state, color in (("attention", 31), ("finished", 32)):
             with self.subTest(state=state):
                 self.tmux.run("select-window", "-t", window)
                 self.tmux.report_agent_state(content.id, state, os.getpid())
                 self.tmux.run("send-keys", "-t", content.id, "printf '\\a'", "Enter")
-                eventually(lambda: pane_contains_any(self.tmux, sidebar.id, (indicator,)))
+                eventually(lambda: f"\x1b[{color}m▲" in
+                           self.tmux.run("capture-pane", "-ep", "-t", sidebar.id))
                 os.write(master, b"\x1b[<0;3;4M\x1b[<0;3;4m")
                 eventually(lambda: self.tmux.pane(session + ":").id == content.id)
                 eventually(lambda: not any(tab.id == content.window for tab in self.tmux.attention_tabs()))
-                eventually(lambda: not pane_contains_any(self.tmux, original_sidebar.id, (indicator,)))
+                eventually(lambda: not pane_contains_any(self.tmux, original_sidebar.id, ("▲",)))
                 report = json.loads(self.tmux.run("show-options", "-pqv", "-t", content.id, "@workmux-agent"))
                 self.assertEqual(report["state"], state)  # Clearing alerts need not mutate agent reports.
         self.tmux.report_agent_state(content.id, "working", os.getpid())
@@ -1875,7 +1878,7 @@ class TmuxIntegrationTests(unittest.TestCase):
         self.tmux.run("set-option", "-s", "focus-events", "on")
         master, _, client = self.attach(first)
         self.tmux.run("send-keys", "-t", attention, "printf '\\a'", "Enter")
-        eventually(lambda: any(line.startswith('⚠ ') and '✦' in line for line in
+        eventually(lambda: any(line.startswith('▲ ') and '✦' in line for line in
                                self.tmux.run("capture-pane", "-p", "-t", sidebar.id).splitlines()))
         # First workspace, second workspace, then its child: global terminal row 5.
         os.write(master, b"\x1b[<0;3;5M\x1b[<0;3;5m")

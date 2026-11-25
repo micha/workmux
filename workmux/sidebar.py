@@ -10,7 +10,7 @@ import time
 from .core import Tab, Tmux, WorkmuxError, Workspace
 from .git_status import GitStatus
 from .sidebar_state import SidebarState
-from .status import INDICATORS, WindowIndicators
+from .status import WindowIndicators
 
 
 AGENT_ROW_STATES = ("working", "attention", "finished")
@@ -18,13 +18,14 @@ SNAPSHOT_INTERVAL = 0.4
 HEART_PERIOD_SECONDS = 1.0
 HEART_TRANSITIONS = ((0.7, True), (0.8, False), (0.9, True))  # End offset, resting.
 WHEEL_SCROLL_ROWS = 3
+SIDEBAR_INDICATORS = {"working": "♥", "attention": "▲", "finished": "▲", "alert": "▲"}
 GIT_DIVERGENCE = {"ahead": "↑", "behind": "↓", "diverged": "↕"}
-GIT_AMBER_256 = 214
+AMBER_256 = 214
 STATUS_FOREGROUNDS = {
     "working": curses.COLOR_RED,
     "attention": curses.COLOR_RED,
     "finished": curses.COLOR_GREEN,
-    "other": curses.COLOR_YELLOW,
+    "alert": curses.COLOR_YELLOW,
     "git-clean": curses.COLOR_BLUE,
     "git-dirty": curses.COLOR_YELLOW,  # Fallback for terminals without 256 colors.
     "git-conflict": curses.COLOR_RED,
@@ -73,7 +74,7 @@ def sidebar_rows(workspaces: list[Workspace], tabs: list[Tab],
     git_states, checkouts, checkout_windows = git_states or {}, checkouts or {}, checkout_windows or {}
     children = {}
     for tab in tabs:
-        if tab.state in INDICATORS:
+        if tab.state in SIDEBAR_INDICATORS:
             children.setdefault(tab.session, []).append(tab)
     rows = []
     for position, workspace in enumerate(workspaces, 1):
@@ -132,8 +133,8 @@ def status_attributes() -> dict[str, int]:
         curses.use_default_colors()
         attributes = {}
         for pair, (state, foreground) in enumerate(STATUS_FOREGROUNDS.items(), 1):
-            if state == "git-dirty" and curses.COLORS >= 256:
-                foreground = GIT_AMBER_256
+            if foreground == curses.COLOR_YELLOW and curses.COLORS >= 256:
+                foreground = AMBER_256
             curses.init_pair(pair, foreground, -1)
             attributes[state] = curses.color_pair(pair)
         return attributes
@@ -170,10 +171,9 @@ def draw_row(screen, position: int, row: SidebarRow, attribute: int,
              colors: dict[str, int], *, workspace_marker: str = " ", working_resting: bool = False) -> None:
     """Draw status and navigation marks independently of workspace dimming."""
     state = row.state or ""
-    indicator = INDICATORS.get(state, "")
-    if indicator:
-        color = "other" if state == "alert" else state
-    else:
+    indicator = SIDEBAR_INDICATORS.get(state, "")
+    color = state
+    if not indicator:
         indicator, color = _git_indicator(row.git_states)
     draw_text(screen, position, f"{indicator or ' '}{workspace_marker}{row.text}", attribute)
     if workspace_marker != " " and attribute & curses.A_DIM:
