@@ -27,6 +27,38 @@ function notify(ctx: ExtensionContext, message: string): void {
   process.stdout.write(`\x07${sequence}`);
 }
 
+function interactiveTmuxTarget(ctx: ExtensionContext): { pane: string; socket: string } | undefined {
+  if (ctx.mode !== "tui" || !ctx.hasUI || !process.stdout.isTTY) return;
+  const tmux = process.env.TMUX ?? "";
+  const pane = process.env.TMUX_PANE;
+  const match = /^(\/.+),[0-9]+,[0-9]+$/.exec(tmux);
+  if (!match || match[0] !== tmux || !pane || /^%[0-9]+$/.exec(pane)?.[0] !== pane) return;
+  return { pane, socket: match[1] };
+}
+
+const equals = (option: string, expected: string) => `#{==:#{${option}},${expected}}`;
+const expectedLaunchOption = "@workmux_team_expected_launch";
+const teamRegistrationOption = "@workmux_team_registration";
+
+async function registerTeamWorker(pi: ExtensionAPI, ctx: ExtensionContext, reason: string): Promise<void> {
+  if (reason !== "startup") return;
+  const launch = process.env.WORKMUX_TEAM_LAUNCH_ID;
+  if (!launch || /^[0-9a-f]{32}$/.exec(launch)?.[0] !== launch) return;
+  const target = interactiveTmuxTarget(ctx);
+  if (!target) return;
+  // Check and write in the same command queue. Workmux can invalidate the
+  // launch, and the first registration wins even with overlapping Pi starts.
+  const { socket, pane } = target;
+  const guard = `#{&&:${equals(expectedLaunchOption, launch)},${equals(teamRegistrationOption, "")}}`;
+  try {
+    await pi.exec("tmux", ["-S", socket, "if-shell", "-F", "-t", pane, guard,
+      `set-option -p -t ${pane} ${teamRegistrationOption} ${launch}:${process.pid}`],
+    { timeout: 1000, maxBuffer: 4096 });
+  } catch {
+    // Registration is optional for Pi. Workmux handles startup timeouts.
+  }
+}
+
 const tokenOption = "@workmux-pi-reload-token";
 const requestOption = "@workmux-pi-reload-request";
 const resultOption = "@workmux-pi-reload-result";
@@ -66,7 +98,6 @@ function setupReload(pi: ExtensionAPI, promptOpen: () => boolean) {
     }
   }
 
-  const equals = (option: string, expected: string) => `#{==:#{${option}},${expected}}`;
   const owned = (target: ReloadListener) => equals(tokenOption, target.token);
 
   async function writeResult(target: ReloadListener, request: ReloadRequest, status: string,
@@ -160,11 +191,11 @@ function setupReload(pi: ExtensionAPI, promptOpen: () => boolean) {
   }
 
   async function start(ctx: ExtensionContext, reason: string): Promise<void> {
-    const pane = process.env.TMUX_PANE;
-    const socket = /^(\/.+),[0-9]+,[0-9]+$/.exec(process.env.TMUX ?? "")?.[1];
-    if (listener || ctx.mode !== "tui" || !ctx.hasUI || !process.stdout.isTTY ||
-        !socket || !pane || !/^%[0-9]+$/.test(pane) || !hasReloadCommand()) return;
-    const target: ReloadListener = { pane, socket, token: randomBytes(16).toString("hex"), abort: new AbortController() };
+    if (listener) return;
+    const paneTarget = interactiveTmuxTarget(ctx);
+    if (!paneTarget || !hasReloadCommand()) return;
+    const { pane } = paneTarget;
+    const target: ReloadListener = { ...paneTarget, token: randomBytes(16).toString("hex"), abort: new AbortController() };
     listener = target;
     target.registration = (async () => {
       if (reason === "reload") {
@@ -217,7 +248,11 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (event, ctx) => {
     active = !ctx.isIdle();
-    await Promise.all([reload.start(ctx, event.reason).catch(() => {}), report(ctx, active ? "working" : "idle")]);
+    await Promise.all([
+      reload.start(ctx, event.reason).catch(() => {}),
+      report(ctx, active ? "working" : "idle"),
+      registerTeamWorker(pi, ctx, event.reason),
+    ]);
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {

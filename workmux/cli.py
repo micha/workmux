@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -71,11 +72,19 @@ def parser() -> argparse.ArgumentParser:
     new_tab.add_argument("name", nargs="?", default="terminal")
     add_pane(new_tab)
 
-    team = commands.add_parser("team", help="Launch and label a three-pane Pi team")
+    team = commands.add_parser("team", help="Launch and manage a three-pane Pi team")
     teams = team.add_subparsers(dest="action", required=True)
     new_team = teams.add_parser("new", help="Start a team in the current window from its foreground shell")
     new_team.add_argument("name", help="Team name (does not rename the window)")
-    add_pane(teams.add_parser("status", help="Show role assignments for a team"))
+    new_team.add_argument(
+        "--launcher", help="Worker launcher executable for managed teams on Linux (requires --profile)",
+    ).completer = completion.executables
+    new_team.add_argument("--profile", help="Initial worker launcher profile (requires --launcher)")
+    reset_team = teams.add_parser("reset", help="Replace both managed workers from their master pane")
+    reset_team.add_argument("--profile", required=True, help="Worker launcher profile for the replacement pair")
+    team_status = teams.add_parser("status", help="Show role assignments for a team")
+    team_status.add_argument("--json", action="store_true", help="Print the current managed worker PID pair or null")
+    add_pane(team_status)
     add_pane(teams.add_parser("refresh", help="Publish tmux format variables for an existing team"))
     add_pane(teams.add_parser("clear", help="Forget a team without closing any pane"))
 
@@ -200,7 +209,20 @@ def main(argv: list[str] | None = None) -> int:
         current_tmux = os.environ.get("TMUX", "").rsplit(",", 2)
         current_socket = current_tmux[0]
         socket = tmux_socket(args.server, args.socket)
-        tmux = Tmux(server=args.server or "workmux", socket=socket)
+        if args.command == "team" and args.action == "reset":
+            source = os.environ.get("TMUX_PANE", "")
+            if (len(current_tmux) != 3 or not os.path.isabs(current_socket) or
+                    not all(re.fullmatch(r"[0-9]+", field) for field in current_tmux[1:]) or
+                    not re.fullmatch(r"%[0-9]+", source)):
+                raise WorkmuxError("Run team reset from the master pane with TMUX and TMUX_PANE set.")
+            if args.server or (args.socket is not None and
+                               os.path.realpath(args.socket) != os.path.realpath(current_socket)):
+                raise WorkmuxError("Team reset uses the master pane's tmux server. Omit --server and --socket.")
+            tmux = Tmux(socket=current_socket, start_server=False)
+            if tmux.run("display-message", "-p", "-t", source, "#{pid}") != current_tmux[1]:
+                raise WorkmuxError("The tmux server for the master pane has changed. Run team reset from the current master pane.")
+        else:
+            tmux = Tmux(server=args.server or "workmux", socket=socket)
         if args.command == "enable":
             result = tmux.enable(require_pane(args), args.client)
             if args.client:
@@ -259,11 +281,15 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "tab":
             print(tmux.new_tab(require_pane(args), args.name))
         elif args.command == "team":
-            from .teams import clear_team, new_team, refresh_team, team_status
+            from .teams import clear_team, new_team, refresh_team, reset_team, team_status
             if args.action == "new":
-                new_team(tmux, os.environ.get("TMUX_PANE"), args.name)
+                if (args.launcher is None) != (args.profile is None):
+                    raise WorkmuxError("Pass --launcher and --profile together to start a managed team.")
+                new_team(tmux, os.environ.get("TMUX_PANE"), args.name, launcher=args.launcher, profile=args.profile)
+            elif args.action == "reset":
+                print(reset_team(tmux, source, args.profile))
             elif args.action == "status":
-                print(team_status(tmux, require_pane(args)))
+                print(team_status(tmux, require_pane(args), as_json=args.json))
             elif args.action == "refresh":
                 refresh_team(tmux, require_pane(args))
             else:

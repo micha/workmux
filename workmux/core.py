@@ -307,7 +307,7 @@ class Tmux:
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=self.timeout,
             )
         except FileNotFoundError as error:
-            raise WorkmuxError("tmux is not installed. Install tmux 3.3 or newer.") from error
+            raise WorkmuxError("tmux is not installed. Install tmux 3.8 or newer.") from error
         if result.returncode:
             message = result.stderr.strip()
             # An empty, not-yet-started dedicated server is normal for discovery.

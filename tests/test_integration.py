@@ -29,7 +29,7 @@ from workmux.pi_reload import reload_panes
 from workmux.plugins import install_plugin
 from workmux.sidebar import sidebar_rows
 from workmux.status import WindowIndicators
-from workmux.teams import new_team, team_status
+from workmux.teams import new_team, reset_team, team_status
 
 
 def eventually(predicate, message="condition was not reached", timeout=8):
@@ -380,6 +380,7 @@ IFS= read -r input
         self.assertLessEqual(max(widths) - min(widths), 1)
         status = f"Team: Test Team\nmaster\t{master.id}\nslave 1\t{first}\nslave 2\t{second}"
         self.assertEqual(team_status(self.tmux, sidebar.id), status)
+        self.assertEqual(team_status(self.tmux, sidebar.id, as_json=True), 'null')
 
         def pane_border(pane):
             return self.tmux.run("display-message", "-p", "-t", pane, "#{E:pane-border-format}")
@@ -461,6 +462,313 @@ IFS= read -r input
         self.assertEqual(self.tmux.run("display-message", "-p", "-t", master.id,
                                        "#{@workmux-team-name}:#{E:@workmux-team-role}"), ":")
         with self.assertRaisesRegex(WorkmuxError, "no team"):
+            team_status(self.tmux, master.id)
+
+    def managed_team(self, initial="design", returns=False):
+        if sys.platform != "linux" or not hasattr(os, "pidfd_open"):
+            self.skipTest("managed teams require Linux pidfds")
+        root = Path(self.temporary.name)
+        executable = self.fake_team_pi()
+        executable.write_text(f"#!{sys.executable}\n" + f'''
+import json, os, subprocess, sys
+from pathlib import Path
+root = Path({str(root)!r})
+(root / 'master-pi').write_text(str(os.getpid()))
+for line in sys.stdin:
+    result = subprocess.run(line, shell=True, capture_output=True, text=True)
+    (root / 'master-result').write_text(json.dumps([result.returncode, result.stdout, result.stderr]))
+''')
+        directory = root / "repo space; ' $literal #{session_name};"
+        directory.mkdir()
+        pi = root / "stand-in pi"
+        pi.write_text(f'''
+import json, os, signal, subprocess, time
+from pathlib import Path
+root = Path({str(root)!r})
+pane = os.environ['TMUX_PANE']
+role = os.environ['WORKMUX_TEAM_ROLE']
+launch = os.environ['WORKMUX_TEAM_LAUNCH_ID']
+socket = os.environ['TMUX'].rsplit(',', 2)[0]
+profile = __import__('sys').argv[1]
+if profile == 'slow':
+    while not (root / 'allow-registration').exists():
+        time.sleep(.02)
+if profile == 'unregistered':
+    signal.pause()
+if profile == 'stubborn' and role == 'slave 1':
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+guard = '#{{&&:#{{==:#{{@workmux_team_expected_launch}},' + launch + '}},#{{==:#{{@workmux_team_registration}},}}}}'
+subprocess.run(['tmux', '-S', socket, 'if-shell', '-F', '-t', pane, guard,
+                'set-option -p -t ' + pane + ' @workmux_team_registration ' + launch + ':' + str(os.getpid())],
+               check=True)
+signal.pause()
+''')
+        launcher = root / "launch; ' $worker #{window_name};"
+        launcher.write_text(f"#!{sys.executable}\n" + f'''
+import json, os, subprocess, sys
+from pathlib import Path
+root = Path({str(root)!r})
+role = os.environ['WORKMUX_TEAM_ROLE']
+launch = os.environ['WORKMUX_TEAM_LAUNCH_ID']
+profile, = sys.argv[1:]
+(root / (launch + '.launch')).write_text(json.dumps([role, sys.argv[1:], os.getcwd(), os.getpid()]))
+if profile == 'partial' and role == 'slave 2':
+    sys.exit(23)
+raise SystemExit(subprocess.call([sys.executable, {str(pi)!r}, profile]))
+''')
+        launcher.chmod(0o755)
+        session, master, sidebar = self.workspace()
+        shell = self.tmux.run('display-message', '-p', '-t', master.id, '#{pane_pid}')
+        pty_master, _, _ = self.attach(session)
+        returned = root / 'shell-returned'
+        command = (f"cd {shlex.quote(str(directory))} && PATH={shlex.quote(str(executable.parent))}:\"$PATH\" "
+                   f"workmux team new Managed --launcher {shlex.quote(str(launcher))} --profile {shlex.quote(initial)}; "
+                   f"printf '%s' \"$?\" > {shlex.quote(str(returned))}\r")
+        os.write(pty_master, command.encode())
+        if returns:
+            eventually(lambda: returned.exists() and returned.read_text(), 'managed creation did not return to the shell')
+            self.assertEqual(returned.read_text(), '1')
+            self.assertIn('Worker startup failed', self.tmux.run('capture-pane', '-p', '-t', master.id))
+            return master, sidebar, shell
+        try:
+            eventually((root / 'master-pi').exists, 'master did not start after both workers registered')
+        except AssertionError as error:
+            raise AssertionError(self.tmux.run('capture-pane', '-p', '-t', master.id)) from error
+        metadata = json.loads(self.tmux.run('show-options', '-wqv', '-t', master.window, '@workmux-team'))
+        return master, pty_master, metadata['panes'][1:], directory
+
+    def team_cli(self, pane, *args, asynchronous=False):
+        value = self.tmux.run('display-message', '-p', '-t', pane, '#{pid},#{s/^\\$//:session_id}')
+        env = dict(os.environ, TMUX=f'{self.socket},{value}', TMUX_PANE=pane)
+        options = dict(env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        command = ['workmux', 'team', *args]
+        return subprocess.Popen(command, **options) if asynchronous else subprocess.run(command, timeout=15, **options)
+
+    def test_managed_worker_reset_preserves_layout_focus_and_master(self):
+        master, terminal, workers, directory = self.managed_team()
+        root = Path(self.temporary.name)
+        original = json.loads(self.team_cli(master.id, 'status', '--json').stdout)
+        leaders = [int(self.tmux.run('display-message', '-p', '-t', pane, '#{pane_pid}')) for pane in workers]
+        master_pid = int((root / 'master-pi').read_text())
+        self.assertEqual(set(original), {'slave 1', 'slave 2'})
+        self.tmux.run('resize-pane', '-Z', '-t', master.id)
+        fmt = '#{window_layout} #{window_visible_layout} #{window_zoomed_flag} #{pane_active} #{pane_pid}'
+        before = self.tmux.run('display-message', '-p', '-t', master.id, fmt)
+        os.write(terminal, b"workmux team reset --profile ';'\r")
+        result = root / 'master-result'
+        eventually(lambda: result.exists() and result.read_text())
+        code, stdout, stderr = json.loads(result.read_text())
+        self.assertEqual((code, stderr), (0, ''))
+        new = json.loads(stdout)
+        self.assertEqual(new, json.loads(self.team_cli(master.id, 'status', '--json').stdout))
+        self.assertTrue(set(original.values()).isdisjoint(new.values()))
+        for original_pid in [*original.values(), *leaders]:
+            try:
+                fd = os.pidfd_open(original_pid)
+            except ProcessLookupError:
+                continue
+            try:
+                self.assertEqual(select.select([fd], [], [], 0)[0], [fd])  # Exited, even if not yet reaped.
+            finally:
+                os.close(fd)
+        self.assertEqual(self.tmux.run('display-message', '-p', '-t', master.id, fmt), before)
+        os.kill(master_pid, 0)
+        records = []
+        for worker in workers:
+            token = self.tmux.run('show-options', '-pqv', '-t', worker, '@workmux_team_expected_launch')
+            records.append(json.loads((root / f'{token}.launch').read_text()))
+        self.assertEqual([record[:3] for record in records],
+                         [['slave 1', [';'], str(directory)], ['slave 2', [';'], str(directory)]])
+        self.assertTrue(all(record[3] not in new.values() for record in records))
+
+    def test_managed_setup_failure_leaves_original_shell(self):
+        master, sidebar, shell = self.managed_team(initial='partial', returns=True)
+        self.assertEqual({pane.id for pane in self.tmux.panes(master.window)}, {master.id, sidebar.id})
+        self.assertEqual(self.tmux.run('display-message', '-p', '-t', master.id, '#{pane_pid}'), shell)
+        self.assertFalse((Path(self.temporary.name) / 'master-pi').exists())
+        with self.assertRaisesRegex(WorkmuxError, 'no team'):
+            team_status(self.tmux, master.id)
+
+    def test_managed_partial_startup_closes_registration_and_allows_retry(self):
+        master, _, workers, _ = self.managed_team()
+        fmt = '#{pane_id} #{pane_active} #{window_layout}'
+        before = self.tmux.run('list-panes', '-t', master.window, '-F', fmt)
+        original = json.loads(self.team_cli(master.id, 'status', '--json').stdout)
+        partial = self.team_cli(master.id, 'reset', '--profile', 'partial')
+        self.assertEqual((partial.returncode, partial.stdout), (1, ''))
+        self.assertRegex(partial.stderr, r'slave 2 .*launcher exited with status 23')
+        self.assertEqual(self.team_cli(master.id, 'status', '--json').stdout, 'null\n')
+        self.assertEqual(self.tmux.run('display-message', '-p', '-t', workers[1], '#{pane_dead}'), '1')
+        for pane in workers:
+            self.assertEqual(self.tmux.run('show-options', '-pqv', '-t', pane, '@workmux_team_expected_launch'), '')
+        retry = self.team_cli(master.id, 'reset', '--profile', 'implementation')
+        self.assertEqual((retry.returncode, retry.stderr), (0, ''))
+        self.assertEqual(json.loads(retry.stdout), json.loads(self.team_cli(master.id, 'status', '--json').stdout))
+        self.assertTrue(set(original.values()).isdisjoint(json.loads(retry.stdout).values()))
+        self.assertEqual(self.tmux.run('list-panes', '-t', master.window, '-F', fmt), before)
+
+    def test_managed_startup_timeout_closes_pending_slots(self):
+        master, _, workers, _ = self.managed_team()
+        with patch('workmux.teams._START_TIMEOUT', 0.5):
+            with self.assertRaisesRegex(WorkmuxError, r'slave 1 .*no live Pi registration; slave 2 .*no live Pi registration'):
+                reset_team(self.tmux, master.id, 'unregistered')
+        self.assertEqual(team_status(self.tmux, master.id, as_json=True), 'null')
+        for pane in workers:
+            self.assertEqual(self.tmux.run('show-options', '-pqv', '-t', pane, '@workmux_team_expected_launch'), '')
+
+    def test_managed_retry_does_not_forget_registered_process_still_exiting(self):
+        master, _, _, _ = self.managed_team(initial='stubborn')
+        pid = json.loads(team_status(self.tmux, master.id, as_json=True))['slave 1']
+        root = Path(self.temporary.name)
+        fd = os.pidfd_open(pid)
+        try:
+            with patch('workmux.teams._STOP_TIMEOUT', 0.5):
+                for profile in ('first-attempt', 'retry'):
+                    with self.assertRaisesRegex(WorkmuxError, 'Worker teardown did not complete'):
+                        reset_team(self.tmux, master.id, profile)
+                    self.assertEqual(team_status(self.tmux, master.id, as_json=True), 'null')
+                    self.assertEqual(len(list(root.glob('*.launch'))), 2)
+                    self.assertEqual(select.select([fd], [], [], 0)[0], [])
+        finally:
+            if not select.select([fd], [], [], 0)[0]:
+                signal.pidfd_send_signal(fd, signal.SIGTERM)
+            os.close(fd)
+        result = self.team_cli(master.id, 'reset', '--profile', 'implementation')
+        self.assertEqual((result.returncode, result.stderr), (0, ''))
+
+    def test_managed_reset_is_serialized_and_ignores_stale_registration(self):
+        master, _, workers, _ = self.managed_team()
+        root = Path(self.temporary.name)
+        old = self.tmux.run('show-options', '-pqv', '-t', workers[0], '@workmux_team_expected_launch')
+        reset = self.team_cli(master.id, 'reset', '--profile', 'slow', asynchronous=True)
+        try:
+            def launched():
+                for worker in workers:
+                    launch = self.tmux.run('show-options', '-pqv', '-t', worker, '@workmux_team_expected_launch')
+                    if not launch or not (root / f'{launch}.launch').exists():
+                        return False
+                    if json.loads((root / f'{launch}.launch').read_text())[1] != ['slow']:
+                        return False
+                return True
+
+            eventually(launched)
+            self.assertEqual(self.team_cli(master.id, 'status', '--json').stdout, 'null\n')
+            blocked = self.team_cli(master.id, 'reset', '--profile', 'other')
+            self.assertEqual((blocked.returncode, blocked.stdout), (1, ''))
+            self.assertIn('Another managed team operation', blocked.stderr)
+            stale_guard = '#{==:#{@workmux_team_expected_launch},' + old + '}'
+            self.tmux.run('if-shell', '-F', '-t', workers[0], stale_guard,
+                          f'set-option -p -t {workers[0]} @workmux_team_registration {old}:{os.getpid()}')
+            self.assertEqual(self.tmux.run('show-options', '-pqv', '-t', workers[0], '@workmux_team_registration'), '')
+            (root / 'allow-registration').touch()
+            stdout, stderr = reset.communicate(timeout=8)
+            self.assertEqual((reset.returncode, stderr), (0, ''))
+            self.assertEqual(json.loads(stdout), json.loads(self.team_cli(master.id, 'status', '--json').stdout))
+        finally:
+            if reset.poll() is None:
+                reset.kill()
+                reset.communicate()
+
+    def test_managed_reset_recovers_after_first_park_is_interrupted(self):
+        master, _, workers, _ = self.managed_team()
+        committed = json.loads(self.team_cli(master.id, 'status', '--json').stdout)
+        code = '''
+import os, signal, sys
+from workmux import teams
+from workmux.core import Tmux
+respawn = teams._respawn
+def interrupt_after_park(*args, **kwargs):
+    respawn(*args, **kwargs)
+    os.kill(os.getpid(), signal.SIGKILL)
+teams._respawn = interrupt_after_park
+teams.reset_team(Tmux(socket=sys.argv[1]), sys.argv[2], 'never-started')
+'''
+        result = subprocess.run([sys.executable, '-c', code, self.socket, master.id],
+                                capture_output=True, text=True, timeout=8)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (-signal.SIGKILL, '', ''))
+        eventually(lambda: self.tmux.run('display-message', '-p', '-t', workers[0], '#{pane_dead}') == '1')
+        self.assertEqual(self.tmux.run('display-message', '-p', '-t', workers[1], '#{pane_dead}'), '0')
+        self.assertEqual(self.team_cli(master.id, 'status', '--json').stdout, 'null\n')
+        retry = self.team_cli(master.id, 'reset', '--profile', 'implementation')
+        self.assertEqual((retry.returncode, retry.stderr), (0, ''))
+        self.assertTrue(set(committed.values()).isdisjoint(json.loads(retry.stdout).values()))
+
+    def test_managed_reset_preflights_master_launcher_directory_and_membership(self):
+        master, _, workers, directory = self.managed_team()
+        fmt = '#{pane_id} #{pane_pid}'
+        before = self.tmux.run('list-panes', '-t', master.window, '-F', fmt)
+        rejected = self.team_cli(workers[0], 'reset', '--profile', 'implementation')
+        self.assertIn('original master pane', rejected.stderr)
+        metadata = json.loads(self.tmux.run('show-options', '-wqv', '-t', master.window, '@workmux-team'))
+        launcher = Path(metadata['managed']['launcher'])
+        launcher.chmod(0o644)
+        rejected = self.team_cli(master.id, 'reset', '--profile', 'implementation')
+        self.assertIn('Saved launcher is not executable', rejected.stderr)
+        launcher.chmod(0o755)
+        renamed = directory.rename(directory.with_name('renamed'))
+        rejected = self.team_cli(master.id, 'reset', '--profile', 'implementation')
+        self.assertIn('Saved team directory is not accessible', rejected.stderr)
+        renamed.rename(directory)
+        self.assertEqual(self.tmux.run('list-panes', '-t', master.window, '-F', fmt), before)
+        other = self.tmux.run('display-message', '-p', '-t', workers[0], '#{pane_pid}')
+        self.tmux.run('break-pane', '-d', '-s', workers[1])
+        rejected = self.team_cli(master.id, 'reset', '--profile', 'implementation')
+        self.assertEqual((rejected.returncode, rejected.stdout), (1, ''))
+        self.assertIn('pane is missing, moved', rejected.stderr)
+        self.assertEqual(self.tmux.run('display-message', '-p', '-t', workers[0], '#{pane_pid}'), other)
+        self.assertEqual(self.team_cli(master.id, 'status', '--json').stdout, 'null\n')
+
+    def test_managed_reset_refuses_manually_repurposed_pane(self):
+        master, _, workers, _ = self.managed_team()
+        fmt = '#{pane_pid} #{pane_dead} #{pane_start_command}'
+        untouched = self.tmux.run('display-message', '-p', '-t', workers[0], fmt)
+        self.tmux.run('respawn-pane', '-k', '-t', workers[1], sys.executable, '-c', 'import signal; signal.pause()')
+        foreign = self.tmux.run('display-message', '-p', '-t', workers[1], fmt)
+        self.assertEqual(self.team_cli(master.id, 'status', '--json').stdout, 'null\n')
+        rejected = self.team_cli(master.id, 'reset', '--profile', 'implementation')
+        self.assertEqual((rejected.returncode, rejected.stdout), (1, ''))
+        self.assertIn('slave 2', rejected.stderr)
+        self.assertEqual(self.tmux.run('display-message', '-p', '-t', workers[1], fmt), foreign)
+        self.assertEqual(self.tmux.run('display-message', '-p', '-t', workers[0], fmt), untouched)
+        self.tmux.run('respawn-pane', '-k', '-t', workers[1], sys.executable, '-c', 'pass')
+        eventually(lambda: self.tmux.run('display-message', '-p', '-t', workers[1], '#{pane_dead}') == '1')
+        self.assertEqual(self.team_cli(master.id, 'reset', '--profile', 'design').returncode, 1)
+        self.assertEqual(self.tmux.run('display-message', '-p', '-t', workers[0], fmt), untouched)
+
+    def test_managed_tmux_guard_refuses_repurpose_after_preflight(self):
+        from workmux import teams
+
+        master, _, workers, _ = self.managed_team()
+        original_checked = teams._checked
+        foreign = None
+        fmt = '#{pane_pid} #{pane_start_command}'
+
+        def replace_before_park(tmux, target, guard, action):
+            nonlocal foreign
+            if target == workers[1] and action.startswith('"respawn-pane"'):
+                tmux.run('respawn-pane', '-k', '-t', target, sys.executable, '-c', 'import signal; signal.pause()')
+                foreign = tmux.run('display-message', '-p', '-t', target, fmt)
+            return original_checked(tmux, target, guard, action)
+
+        with patch.object(teams, '_checked', side_effect=replace_before_park):
+            with self.assertRaisesRegex(WorkmuxError, 'changed during the operation'):
+                reset_team(self.tmux, master.id, 'implementation')
+        self.assertIsNotNone(foreign)
+        self.assertEqual(self.tmux.run('display-message', '-p', '-t', workers[1], fmt), foreign)
+        self.assertEqual(team_status(self.tmux, master.id, as_json=True), 'null')
+
+    def test_managed_clear_keeps_processes_and_edited_options(self):
+        master, _, workers, _ = self.managed_team()
+        self.tmux.run('set-option', '-w', '-t', master.window, '@workmux-team-role', 'edited', ';',
+                      'set-option', '-p', '-t', workers[1], 'remain-on-exit', 'off')
+        before = self.tmux.run('list-panes', '-t', master.window, '-F', '#{pane_id} #{pane_pid}')
+        result = self.team_cli(master.id, 'clear')
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, '', ''))
+        self.assertEqual(self.tmux.run('list-panes', '-t', master.window, '-F', '#{pane_id} #{pane_pid}'), before)
+        self.assertEqual(self.tmux.run('show-options', '-wqv', '-t', master.window, '@workmux-team-role'), 'edited')
+        self.assertEqual(self.tmux.run('show-options', '-pqv', '-t', workers[1], 'remain-on-exit'), 'off')
+        self.assertEqual(self.tmux.run('show-options', '-pqv', '-t', workers[1], '@workmux_team_expected_launch'), '')
+        with self.assertRaisesRegex(WorkmuxError, 'no team'):
             team_status(self.tmux, master.id)
 
     def attach(self, session, output=None):

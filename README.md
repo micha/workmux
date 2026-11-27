@@ -15,7 +15,7 @@ agent-state indicators and desktop notifications.
 ## Requirements
 
 - Python 3.10 or newer, with `curses`.
-- tmux 3.3 or newer.
+- tmux 3.8 or newer.
 - The installed `workmux` command must be on tmux's `PATH`.
 
 The Python package installs its Tree-sitter dependencies automatically. Agent
@@ -450,6 +450,51 @@ pane or moving it to another tab marks it missing. `workmux team clear` forgets
 the assignments without closing any panes; close extra panes before creating
 another team in that tab.
 
+#### Replace managed workers between phases (Linux)
+
+Managed workers require Linux with `/proc` and pidfd support. With a trusted
+worker launcher and the workmux Pi extension installed or updated
+(`workmux install pi`), opt in from the foreground shell:
+
+```sh
+workmux team new review --launcher /path/to/launch-worker --profile design
+```
+
+Workmux saves the launcher and the shell's current directory and waits for both
+workers to register before starting the master. The launcher receives the
+profile as one literal argument, plus `WORKMUX_TEAM_ROLE` (`slave 1` or
+`slave 2`) and a unique `WORKMUX_TEAM_LAUNCH_ID` in its environment. Have it
+start a fresh interactive Pi in the foreground, preserving `TMUX`, `TMUX_PANE`,
+and `WORKMUX_TEAM_LAUNCH_ID`. Workers need `tmux` on their `PATH` and access to
+the socket and the installed extension. Their processes must be visible from
+the host. Use the profile to define any per-phase directory restrictions;
+workmux does not sandbox the launcher or the workers.
+
+From the master pane (including Pi's `bash` tool):
+
+```sh
+workmux team status --json
+workmux team reset --profile implementation
+```
+
+Reset stops both old workers before starting their replacements in the same
+panes. It does not restart the master or retile the tab. Workers can hand off
+work through shared files rather than carrying over chat history. The launcher
+must not leave background jobs behind: workmux checks that pane leaders and
+registered Pi processes exit, not that every descendant has stopped.
+
+Successful reset prints a JSON object such as `{"slave 1": 172, "slave 2": 173}`.
+Status prints the same object for a complete, current pair, or `null` when no
+pair is available. Registration means Pi started, not that another extension
+or messaging service is ready. The PIDs describe a snapshot, not a guarantee
+that the workers are still running when you use them.
+
+A failed reset reports diagnostics on stderr without a partial pair. You can
+retry explicitly if workmux can still verify pane ownership and teardown. It
+refuses to replace a missing or repurposed worker, including after an
+interruption that leaves ownership or teardown uncertain. `team clear` only
+forgets the team; it does not stop any process.
+
 #### Show team names and roles on pane borders
 
 To show `[review: master]` and similar labels on team panes, add this to
@@ -684,8 +729,7 @@ pane sizing, shell commands, key tables, repeat flags, and notes are preserved.
 Explicit targets (`-t`), full-window splits (`-f`), zoom flags (`-Z`), custom or
 abbreviated layouts, `select-layout -o`, and compound or quoted command bodies
 are not adapted. Unsupported direct bindings produce warnings and stay unchanged.
-Unparseable `list-keys` output is skipped, including whitespace-containing table
-names on tmux 3.6a.
+Unparseable `list-keys` output is skipped.
 
 Commands nested in menus, scripts, conditionals, and templates are not rewritten
 or warned about. Plugin-created direct bindings are supported once loaded, but
