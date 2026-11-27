@@ -13,6 +13,9 @@ dependencies = [
   "tree-sitter-tmux==0.1.5",
 ]
 
+[project.optional-dependencies]
+completion = ["argcomplete>=3.6,<4"]
+
 [project.scripts]
 workmux = "workmux.cli:main"
 

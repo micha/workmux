@@ -6,29 +6,37 @@ import os
 import subprocess
 import sys
 
-from .core import AGENT_STATES, TMUX_EXECUTABLE, Tmux, WorkmuxError
+from . import completion
+from .core import AGENT_STATES, TMUX_EXECUTABLE, Tmux, WorkmuxError, tmux_socket
 from .layouts import LAYOUTS
 from .plugins import HARNESSES
 
 
 def add_pane(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--pane", default=os.environ.get("TMUX_PANE"),
-                        help="Source pane ID (defaults to TMUX_PANE inside a pane)")
+                        help="Source pane ID (defaults to TMUX_PANE inside a pane)").completer = completion.panes
 
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Workspace sidebar and sidebar-aware tiling for tmux.")
     selector = result.add_mutually_exclusive_group()
-    selector.add_argument("--server", help="tmux server name (default: current server inside tmux, else workmux)")
-    selector.add_argument("--socket", help="Explicit tmux socket path")
+    selector.add_argument(
+        "--server", help="tmux server name (default: current server inside tmux, else workmux)",
+    ).completer = completion.servers
+    selector.add_argument("--socket", help="Explicit tmux socket path").completer = completion.sockets
     commands = result.add_subparsers(dest="command", required=True)
+
+    shell_completion = commands.add_parser("completion", help="Print a shell completion script")
+    shell_completion.add_argument("shell", choices=("bash",))
 
     for action, description in (("install", "List supported harnesses or install an agent plugin"),
                                 ("uninstall", "Remove an intact workmux agent plugin")):
         plugin = commands.add_parser(action, help=description)
         plugin.add_argument("plugin", choices=HARNESSES, nargs="?" if action == "install" else None,
                             help="Agent integration to manage (omit for install to list status)")
-        plugin.add_argument("--agent-dir", help="Override the selected harness's personal configuration directory")
+        plugin.add_argument(
+            "--agent-dir", help="Override the selected harness's personal configuration directory",
+        ).completer = completion.directories
 
     workspace = commands.add_parser("workspace", help="Create and list workspaces")
     actions = workspace.add_subparsers(dest="action", required=True)
@@ -37,19 +45,25 @@ def parser() -> argparse.ArgumentParser:
     creation.add_argument("name", nargs="?", help="Workspace name")
     creation.add_argument("--interactive", action="store_true",
                           help="Prompt for a directory (and a name if needed), then open or create the workspace")
-    new.add_argument("--dir", default=".", help="Workspace directory (prompt default in interactive mode)")
+    new.add_argument(
+        "--dir", default=".", help="Workspace directory (prompt default in interactive mode)",
+    ).completer = completion.directories
     new.add_argument("--attach", action="store_true", help="Attach after creating the workspace (outside tmux only)")
     listing = actions.add_parser("list", help="List managed workspaces in sidebar order")
     listing.add_argument("--json", action="store_true")
     select = actions.add_parser("select", help="Select a workspace for an attached client")
     selection = select.add_mutually_exclusive_group(required=True)
-    selection.add_argument("target", nargs="?", help="Workspace ID, session name, or display label")
-    selection.add_argument("--index", type=int, help="1-based workspace index shown in the sidebar")
-    select.add_argument("--client")
+    selection.add_argument(
+        "target", nargs="?", help="Workspace ID, session name, or display label",
+    ).completer = completion.workspaces
+    selection.add_argument(
+        "--index", type=int, help="1-based workspace index shown in the sidebar",
+    ).completer = completion.workspace_indexes
+    select.add_argument("--client").completer = completion.clients
     add_pane(select)
 
     attach = commands.add_parser("attach", help="Attach to an existing workspace from outside tmux")
-    attach.add_argument("target", nargs="?")
+    attach.add_argument("target", nargs="?").completer = completion.workspaces
 
     tab = commands.add_parser("tab", help="Create a tab with a sidebar")
     tabs = tab.add_subparsers(dest="action", required=True)
@@ -82,22 +96,27 @@ def parser() -> argparse.ArgumentParser:
     pi = commands.add_parser("pi", help="Manage registered interactive Pi instances")
     pi_actions = pi.add_subparsers(dest="action", required=True)
     reload_pi = pi_actions.add_parser("reload", help="Request /reload in ready Pi panes on the selected tmux server")
-    reload_pi.add_argument("--popup", metavar="CLIENT", help="Show the completed results in a tmux popup using less")
+    reload_pi.add_argument(
+        "--popup", metavar="CLIENT", help="Show the completed results in a tmux popup using less",
+    ).completer = completion.clients
 
     agent = commands.add_parser("agent", help="Report an agent's state for sidebar tab indicators")
     agents = agent.add_subparsers(dest="action", required=True)
     state = agents.add_parser("state", help="Set or clear the agent state of a content pane")
     state.add_argument("state", choices=AGENT_STATES)
     state.add_argument("--pid", type=int, help="Agent process ID; ignore stale reports after it exits")
-    state.add_argument("--root", action="append",
-                       help="Absolute harness root directory for checkout grouping; repeat for multiple roots")
+    state.add_argument(
+        "--root", action="append", help="Absolute harness root directory for checkout grouping; repeat for multiple roots",
+    ).completer = completion.directories
     add_pane(state)
     hook = agents.add_parser("hook", help="Internal best-effort Codex/Claude command hook")
     hook.add_argument("harness", choices=("codex", "claude"))
     hook.add_argument("--pid", required=True, type=int, help="Harness process ID supplied by its hook shell")
 
     enable = commands.add_parser("enable", help="Enable or reconcile workmux in an existing tmux session")
-    enable.add_argument("--client", help="Invoking client; validates the source session when supplied")
+    enable.add_argument(
+        "--client", help="Invoking client; validates the source session when supplied",
+    ).completer = completion.clients
     add_pane(enable)
     dispatch = commands.add_parser("dispatch", help="Internal dispatcher for adapted keybindings")
     dispatch.add_argument("--binding", required=True)
@@ -153,8 +172,14 @@ def attach(tmux: Tmux, session: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parser().parse_args(argv)
+    arguments = parser()
     try:
+        if argv is None and os.environ.get("_ARGCOMPLETE"):
+            completion.autocomplete(arguments)
+        args = arguments.parse_args(argv)
+        if args.command == "completion":
+            print(completion.bash_script())
+            return 0
         if args.command in ("install", "uninstall"):
             from .plugins import install_plugin, plugin_status, uninstall_plugin
             if args.command == "install" and args.plugin is None:
@@ -174,9 +199,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         current_tmux = os.environ.get("TMUX", "").rsplit(",", 2)
         current_socket = current_tmux[0]
-        socket = args.socket
-        if not socket and not args.server:
-            socket = current_socket or None
+        socket = tmux_socket(args.server, args.socket)
         tmux = Tmux(server=args.server or "workmux", socket=socket)
         if args.command == "enable":
             result = tmux.enable(require_pane(args), args.client)

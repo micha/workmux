@@ -61,6 +61,9 @@
   hook/plugin JSON. Use native events and root-session identity, not transcripts
   or guesses from tool output.
 - `workmux/cli.py`: argument parsing, socket inference, and error reporting.
+- `workmux/completion.py`: opt-in Bash completion from the argparse parser.
+  Use bounded, read-only queries on the same server as the command; never start
+  tmux or run a workmux action from a completion callback.
 
 ## Behavioral contracts
 

@@ -385,6 +385,22 @@ target selects a workspace with that name.
 
 Run `workmux --help` or a subcommand's help for full syntax and JSON output options.
 
+### Bash tab completion
+
+Nix builds include completion support. With pipx, install from the repository
+root with `pipx install '.[completion]'` (add `--force` to update an existing
+installation). Enable completion in Bash with:
+
+```bash
+source <(workmux completion bash)
+```
+
+Add that line to `~/.bashrc` to enable it in future shells. Tab completes
+subcommands, flags, fixed choices, and paths. It also offers live workspace
+names and indexes, pane IDs, and attached clients. It follows the command's
+server selection: pass `--server` or `--socket` before the subcommand to query a
+different server. Completion never starts a tmux server or runs a workmux action.
+
 ### Create a workspace interactively
 
 Run `workmux workspace new --interactive` in a terminal with Python's `readline`

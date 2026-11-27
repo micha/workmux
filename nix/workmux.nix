@@ -25,7 +25,7 @@ pkgs.python3Packages.buildPythonApplication {
         (type == "directory" || pkgs.lib.hasSuffix ".py" relative || resourcePath));
   };
   build-system = [ pkgs.python3Packages.setuptools ];
-  dependencies = import ./python-deps.nix { inherit pkgs; };
+  dependencies = (import ./python-deps.nix { inherit pkgs; }) ++ [ pkgs.python3Packages.argcomplete ];
   # Pin private dependencies without leaking immutable bin directories into
   # tmux's session environment and the interactive shells it creates.
   postPatch = ''
@@ -42,7 +42,7 @@ pkgs.python3Packages.buildPythonApplication {
   pythonImportsCheck = [
     "workmux" "workmux.cli" "workmux.sidebar" "workmux.bindings"
     "workmux.integration" "workmux.plugins" "workmux.checkouts"
-    "workmux.workspace_prompt" "workmux.teams"
+    "workmux.workspace_prompt" "workmux.teams" "workmux.completion"
   ];
   doInstallCheck = true;
   postInstallCheck = ''

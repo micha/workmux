@@ -283,20 +283,28 @@ def sidebar_width(window_width: int, preferred: int = 36) -> int:
 TMUX_EXECUTABLE = "tmux"
 
 
+def tmux_socket(server: str | None, socket: str | None) -> str | None:
+    return socket or (None if server else os.environ.get("TMUX", "").rsplit(",", 2)[0] or None)
+
+
 class Tmux:
-    def __init__(self, *, server: str = "workmux", socket: str | None = None):
+    def __init__(self, *, server: str = "workmux", socket: str | None = None,
+                 start_server: bool = True, timeout: float | None = None):
         self.server = server
         self.socket = socket
+        self.start_server = start_server
+        self.timeout = timeout
 
     @property
     def selector(self) -> list[str]:
         return ["-S", self.socket] if self.socket else ["-L", self.server]
 
     def run(self, *args: str, input: str | None = None, missing_ok: bool = False) -> str:
+        startup = [] if self.start_server else ["-N"]
         try:
             result = subprocess.run(
-                [TMUX_EXECUTABLE, *self.selector, "-f", os.devnull, *args], input=input, text=True,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+                [TMUX_EXECUTABLE, *self.selector, *startup, "-f", os.devnull, *args], input=input, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=self.timeout,
             )
         except FileNotFoundError as error:
             raise WorkmuxError("tmux is not installed. Install tmux 3.3 or newer.") from error

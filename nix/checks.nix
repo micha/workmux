@@ -4,7 +4,7 @@ let
   python = pkgs.python3.withPackages (_: [ package ]);
 in
 pkgs.runCommand "workmux-tests" {
-  nativeBuildInputs = [ python package pkgs.tmux pkgs.git pkgs.nodejs_24 ];
+  nativeBuildInputs = [ python package pkgs.tmux pkgs.git pkgs.nodejs_24 pkgs.bashInteractive ];
 } ''
   export HOME="$TMPDIR/home"
   export SHELL="${pkgs.runtimeShell}"

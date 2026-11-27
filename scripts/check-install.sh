@@ -13,7 +13,7 @@ export XDG_CACHE_HOME="$root/cache" PIP_CACHE_DIR="$root/pip-cache"
 # The tmux server must resolve portable bindings to this installation, not a global app.
 export PATH="$PIPX_BIN_DIR:$PATH"
 
-pipx install --python "$(command -v python3)" "$project_dir"
+pipx install --python "$(command -v python3)" "$project_dir[completion]"
 cd "$root"
 unset PYTHONPATH PYTHONHOME
 "$PIPX_BIN_DIR/workmux" --help >/dev/null
