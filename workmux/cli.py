@@ -36,7 +36,7 @@ def parser() -> argparse.ArgumentParser:
     creation = new.add_mutually_exclusive_group(required=True)
     creation.add_argument("name", nargs="?", help="Workspace name")
     creation.add_argument("--interactive", action="store_true",
-                          help="Prompt for a directory and name, then open or create the workspace")
+                          help="Prompt for a directory (and a name if needed), then open or create the workspace")
     new.add_argument("--dir", default=".", help="Workspace directory (prompt default in interactive mode)")
     new.add_argument("--attach", action="store_true", help="Attach after creating the workspace (outside tmux only)")
     listing = actions.add_parser("list", help="List managed workspaces in sidebar order")
@@ -199,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
                 client = None
                 if args.interactive:
                     from .workspace_prompt import prompt_workspace
-                    selection = prompt_workspace(directory)
+                    selection = prompt_workspace(directory, tmux.workspace_name_taken)
                     if selection is None:
                         return 0
                     name, directory = selection

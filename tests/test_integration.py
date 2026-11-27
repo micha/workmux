@@ -423,10 +423,11 @@ class TmuxIntegrationTests(unittest.TestCase):
         os.write(master, b'\x02:')
         eventually(lambda: b'Test command:' in output)
         os.write(master, b'wn\r')
-        eventually(lambda: b'Directory [.]: ' in output, 'directory prompt did not appear')
-        os.write(master, b'Proj\t\r')
-        eventually(lambda: b'Name [Project With Spaces]:' in output, 'Tab did not complete the directory')
-        os.write(master, b'\r')
+        eventually(lambda: b'Directory: .' in output, 'prefilled directory prompt did not appear')
+        os.write(master, b'/Proj\t\r')
+        if reuse:
+            eventually(lambda: b'Name: Project With Spaces' in output, 'prefilled name prompt did not appear')
+            os.write(master, b'\r')
         workspace = eventually(lambda: next((w for w in self.tmux.workspaces() if w.label == project.name), None))
         self.assertEqual(workspace.directory, str(project))
         eventually(lambda: self.client_session(client) == workspace.id, 'popup client did not switch workspaces')
@@ -435,6 +436,8 @@ class TmuxIntegrationTests(unittest.TestCase):
             self.assertEqual(workspace.id, existing)
             self.assertEqual(self.tmux.pane(existing + ':').id, active)
             self.assertEqual(self.tmux.workspaces(), [workspace])
+        else:
+            self.assertNotIn(b'Name: ', output)
 
     def test_attach_identifies_each_client_and_waits_for_its_session(self):
         first, _ = self.native_session("first")

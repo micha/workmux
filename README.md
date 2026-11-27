@@ -389,14 +389,14 @@ Run `workmux --help` or a subcommand's help for full syntax and JSON output opti
 
 Run `workmux workspace new --interactive` in a terminal with Python's `readline`
 module. Tab completes directories, `~` expands, and spaces in paths don't need
-quotes. Leave the directory blank to use the current directory (or the `--dir`
-value). Leave the name blank to use the resolved directory's basename; enter a
-custom name if the basename isn't a valid workspace name. Missing directories
-are created after both prompts. Ctrl-C cancels.
+quotes. The directory prompt starts with `.` (or the `--dir` value) already
+filled in. Edit it or press Enter to accept it. Workmux uses the resolved
+directory's basename unless that name is taken or invalid. Missing directories
+are created after the prompts. Ctrl-C cancels.
 
-If the name and resolved directory match an existing workspace, the interactive
-command opens that workspace without creating anything. If the name is already
-used for a different directory, choose a different name.
+If the default name is in use, the name prompt starts with it filled in. Press
+Enter to reopen the workspace when the name and directory match. If the name is
+taken by a different workspace or a native tmux session, edit it.
 
 On the current tmux server, the interactive command switches the invoking
 session's client to the workspace. It requires exactly one attached client in

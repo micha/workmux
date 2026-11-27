@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import call, patch
+from unittest.mock import Mock, call, patch
 
 from workmux.cli import main, parser
 from workmux.core import Tmux, WorkmuxError, Workspace, validate_directory
@@ -26,20 +26,42 @@ class WorkspacePromptTests(unittest.TestCase):
             self.assertEqual(directory_matches('~/missing/'), [])
 
     @unittest.skipUnless(find_spec('readline'), 'Python readline is required')
-    def test_prompt_uses_default_directory_and_resolved_basename(self):
+    def test_prompt_uses_default_directory_and_resolved_basename_without_asking_for_name(self):
         with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, HOME=temporary), \
                 patch('sys.stdin.isatty', return_value=True), patch('sys.stdout.isatty', return_value=True), \
-                patch('builtins.input', side_effect=['', '']) as read:
+                patch('builtins.input', side_effect=['']) as read:
             path = Path(temporary) / 'Project With Spaces'
-            self.assertEqual(prompt_workspace('~/other/../Project With Spaces'), (path.name, str(path)))
-            self.assertEqual(read.call_args.args, ('Name [Project With Spaces]: ',))
+            name_taken = Mock(return_value=False)
+            self.assertEqual(prompt_workspace('~/other/../Project With Spaces', name_taken), (path.name, str(path)))
+            name_taken.assert_called_once_with(path.name)
+            read.assert_called_once_with('Directory: ')
             self.assertFalse(path.exists())
+
+    @unittest.skipUnless(find_spec('readline'), 'Python readline is required')
+    def test_prompt_asks_for_name_when_default_is_taken_or_invalid(self):
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch('sys.stdin.isatty', return_value=True), patch('sys.stdout.isatty', return_value=True):
+            for basename, entered, expected in (('project', '', 'project'), ('project', 'other', 'other'),
+                                                ('project.v2', 'custom', 'custom')):
+                with self.subTest(basename=basename, entered=entered), \
+                        patch('builtins.input', side_effect=['', entered]) as read:
+                    path = Path(temporary) / basename
+                    name_taken = Mock(return_value=True)
+                    self.assertEqual(prompt_workspace(str(path), name_taken), (expected, str(path)))
+                    self.assertEqual(read.call_count, 2)
+                    if basename == 'project':
+                        self.assertEqual(read.call_args.args, ('Name: ',))
+                        name_taken.assert_called_once_with(basename)
+                    else:
+                        self.assertIn('not a valid workspace name', read.call_args.args[0])
+                        name_taken.assert_not_called()
 
     @unittest.skipUnless(find_spec('readline'), 'Python readline is required')
     def test_prompt_cancellation_never_creates_directories_or_sessions(self):
         with tempfile.TemporaryDirectory() as temporary, patch('workmux.cli.Tmux') as tmux, \
                 patch('sys.stdin.isatty', return_value=True), patch('sys.stdout.isatty', return_value=True):
             path = Path(temporary) / 'not-created'
+            tmux.return_value.workspace_name_taken.return_value = True
             for steps in ([EOFError], [str(path), KeyboardInterrupt]):
                 with self.subTest(steps=steps), patch('builtins.input', side_effect=steps):
                     self.assertEqual(main(['workspace', 'new', '--interactive']), 0)
@@ -102,6 +124,15 @@ class WorkspacePromptTests(unittest.TestCase):
             self.assertEqual(main(['--socket', '/tmp/other', 'workspace', 'new', '--interactive']), 0)
             self.assertEqual(main(['workspace', 'new', 'named']), 0)
             tmux.return_value.run.assert_not_called()
+
+    def test_native_or_renamed_tmux_sessions_can_take_the_default_name(self):
+        tmux = Tmux()
+        with patch.object(tmux, 'workspaces', return_value=[Workspace('$1', 'renamed', 'original', '/dir')]), \
+                patch.object(tmux, 'run', return_value='renamed\nnative'):
+            for name in ('original', 'renamed', 'native'):
+                with self.subTest(name=name):
+                    self.assertTrue(tmux.workspace_name_taken(name))
+            self.assertFalse(tmux.workspace_name_taken('free'))
 
     def test_name_collision_in_another_directory_does_not_reuse_or_create(self):
         tmux = Tmux()

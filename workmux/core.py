@@ -348,6 +348,11 @@ class Tmux:
     def workspaces(self) -> list[Workspace]:
         return _workspaces(self.run("list-sessions", "-F", _WORKSPACE_FORMAT, missing_ok=True))
 
+    def workspace_name_taken(self, name: str) -> bool:
+        if any(workspace.label == name for workspace in self.workspaces()):
+            return True
+        return name in self.run("list-sessions", "-F", "#{session_name}", missing_ok=True).splitlines()
+
     def sidebar_snapshot(self) -> SidebarSnapshot:
         """Collect all server-wide sidebar data with one client command queue."""
         output = self.run("list-sessions", "-F", "S\t" + _WORKSPACE_FORMAT, ";",
