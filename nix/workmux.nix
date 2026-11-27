@@ -42,7 +42,7 @@ pkgs.python3Packages.buildPythonApplication {
   pythonImportsCheck = [
     "workmux" "workmux.cli" "workmux.sidebar" "workmux.bindings"
     "workmux.integration" "workmux.plugins" "workmux.checkouts"
-    "workmux.workspace_prompt"
+    "workmux.workspace_prompt" "workmux.teams"
   ];
   doInstallCheck = true;
   postInstallCheck = ''

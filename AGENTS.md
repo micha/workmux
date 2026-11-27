@@ -49,6 +49,9 @@
   records, and never fetch or take optional index locks.
 - `workmux/plugins.py`: explicit, safe installation/removal and status reporting
   for bundled agent integrations, including checksum-verified JSON hook files.
+- `workmux/teams.py`: foreground-shell launch of a three-pane Pi team in the
+  current managed window. Store role assignments as window metadata keyed by
+  stable pane IDs; clearing assignments must not stop any process.
 - `workmux/pi_reload.py`: one-shot requests to registered Pi runtimes using
   pane-scoped tmux options and a `wait-for` wakeup, never terminal input.
 - `workmux/agent_hooks.py`: best-effort Codex/Claude command-hook handling. Keep

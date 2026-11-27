@@ -414,6 +414,43 @@ Press prefix, then `:`, type `wn`, and press Enter. The popup starts in the
 active pane's directory; directory completion works inside the popup, not at
 tmux's `:` prompt.
 
+### Start a Pi team in the current tab
+
+From the foreground shell in a workmux tab with a sidebar and exactly one live
+content pane, run `workmux team new review`. Put `pi` on that shell's `PATH`
+first; no workmux agent plugin is required. The command doesn't run from a
+popup, a key binding, or an already-running Pi session.
+
+Workmux leaves the sidebar in place and starts Pi in three side-by-side content
+panes: master, slave 1, and slave 2. The master is the original pane and keeps
+focus. All three sessions start in the shell's current directory and share the
+same files, but not chat history. Workers use the tmux session environment with
+the invoking shell's `PATH`. There is no automatic delegation or edit isolation.
+
+Run `workmux team status` from the tab to see the role assignments. They follow
+pane IDs, not pane positions or running processes. Exiting the master Pi returns
+you to the original shell without stopping the other sessions. Closing a role's
+pane or moving it to another tab marks it missing. `workmux team clear` forgets
+the assignments without closing any panes; close extra panes before creating
+another team in that tab.
+
+#### Show team names and roles on pane borders
+
+To show `[review: master]` and similar labels on team panes, add this to
+`~/.tmux.conf`:
+
+```tmux
+set -g pane-border-status top
+set -g pane-border-format '#{?#{E:@workmux-team-role},[#{@workmux-team-name}: #{E:@workmux-team-role}],#{pane_title}}'
+```
+
+`#{@workmux-team-name}` is the window's team name. `#{E:@workmux-team-role}`
+expands to the current pane's role, or is empty for a non-member pane. The
+example falls back to the normal pane title for those panes. Workmux doesn't
+change your border settings. For a team created before these variables were
+available, run `workmux team refresh` in its tab to publish them without
+restarting Pi.
+
 ### Optional isolated-server workflow
 
 From outside tmux, create a workspace on a separate server:

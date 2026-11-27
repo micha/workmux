@@ -57,6 +57,14 @@ def parser() -> argparse.ArgumentParser:
     new_tab.add_argument("name", nargs="?", default="terminal")
     add_pane(new_tab)
 
+    team = commands.add_parser("team", help="Launch and label a three-pane Pi team")
+    teams = team.add_subparsers(dest="action", required=True)
+    new_team = teams.add_parser("new", help="Start a team in the current window from its foreground shell")
+    new_team.add_argument("name", help="Team name (does not rename the window)")
+    add_pane(teams.add_parser("status", help="Show role assignments for a team"))
+    add_pane(teams.add_parser("refresh", help="Publish tmux format variables for an existing team"))
+    add_pane(teams.add_parser("clear", help="Forget a team without closing any pane"))
+
     split = commands.add_parser("split", help="Split content without splitting the sidebar")
     split.add_argument("direction", choices=("right", "down"))
     add_pane(split)
@@ -227,6 +235,16 @@ def main(argv: list[str] | None = None) -> int:
             return attach(tmux, resolve_workspace(tmux, args.target))
         elif args.command == "tab":
             print(tmux.new_tab(require_pane(args), args.name))
+        elif args.command == "team":
+            from .teams import clear_team, new_team, refresh_team, team_status
+            if args.action == "new":
+                new_team(tmux, os.environ.get("TMUX_PANE"), args.name)
+            elif args.action == "status":
+                print(team_status(tmux, require_pane(args)))
+            elif args.action == "refresh":
+                refresh_team(tmux, require_pane(args))
+            else:
+                clear_team(tmux, require_pane(args))
         elif args.command == "split":
             print(tmux.split(require_pane(args), args.direction))
         elif args.command == "layout":
