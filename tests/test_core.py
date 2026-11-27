@@ -172,7 +172,7 @@ class InputTests(unittest.TestCase):
 
     def test_missing_tmux_is_reported(self):
         with patch("subprocess.run", side_effect=FileNotFoundError):
-            with self.assertRaisesRegex(WorkmuxError, "not installed"):
+            with self.assertRaisesRegex(WorkmuxError, "Install tmux 3.8 or newer"):
                 Tmux().run("list-sessions")
 
     def test_permission_errors_are_not_treated_as_an_empty_server(self):
@@ -208,3 +208,46 @@ class InputTests(unittest.TestCase):
                 tmux.return_value.enable.return_value.warnings = ()
                 self.assertEqual(main(["--server", "chosen", "enable"]), 0)
                 tmux.assert_called_once_with(server="chosen", socket=None)
+
+    def test_team_reset_uses_calling_pane_and_its_socket(self):
+        socket = "/tmp/socket,with,commas"
+        pair = '{"slave 1": 172, "slave 2": 173}'
+        with patch.dict(os.environ, {"TMUX": f"{socket},1234,0", "TMUX_PANE": "%3"}, clear=True), \
+                patch("workmux.cli.Tmux") as tmux, patch("workmux.teams.reset_team", return_value=pair) as reset, \
+                patch("sys.stdout", new_callable=io.StringIO) as stdout:
+            tmux.return_value.run.return_value = "1234"
+            self.assertEqual(main(["--socket", socket, "team", "reset", "--profile", "phase ; two"]), 0)
+            tmux.assert_called_once_with(socket=socket, start_server=False)
+            tmux.return_value.run.assert_called_once_with("display-message", "-p", "-t", "%3", "#{pid}")
+            reset.assert_called_once_with(tmux.return_value, "%3", "phase ; two")
+            self.assertEqual(stdout.getvalue(), pair + "\n")
+
+    def test_team_reset_rejects_other_servers_and_missing_pane_context(self):
+        environment = {"TMUX": "/tmp/current,1234,0", "TMUX_PANE": "%3"}
+        for env, flags in (({}, []), ({"TMUX": environment["TMUX"]}, []),
+                           ({**environment, "TMUX_PANE": "3"}, []),
+                           ({**environment, "TMUX": "/tmp/current"}, []),
+                           (environment, ["--server", "other"]),
+                           (environment, ["--socket", "/tmp/other"])):
+            with self.subTest(env=env, flags=flags), patch.dict(os.environ, env, clear=True), \
+                    patch("workmux.cli.Tmux") as tmux, patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                self.assertEqual(main([*flags, "team", "reset", "--profile", "implementation"]), 1)
+                self.assertIn("master pane", stderr.getvalue())
+                tmux.assert_not_called()
+
+    def test_team_reset_rejects_a_replaced_server_at_the_same_socket(self):
+        with patch.dict(os.environ, {"TMUX": "/tmp/current,1234,0", "TMUX_PANE": "%3"}, clear=True), \
+                patch("workmux.cli.Tmux") as tmux, patch("workmux.teams.reset_team") as reset, \
+                patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            tmux.return_value.run.return_value = "5678"
+            self.assertEqual(main(["team", "reset", "--profile", "implementation"]), 1)
+            self.assertIn("server for the master pane has changed", stderr.getvalue())
+            reset.assert_not_called()
+
+    def test_team_new_requires_both_managed_options(self):
+        for flag in ("--launcher", "--profile"):
+            with self.subTest(flag=flag), patch("workmux.teams.new_team") as new, \
+                    patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                self.assertEqual(main(["team", "new", "review", flag, "value"]), 1)
+                self.assertIn("--launcher and --profile together", stderr.getvalue())
+                new.assert_not_called()

@@ -50,8 +50,11 @@
 - `workmux/plugins.py`: explicit, safe installation/removal and status reporting
   for bundled agent integrations, including checksum-verified JSON hook files.
 - `workmux/teams.py`: foreground-shell launch of a three-pane Pi team in the
-  current managed window. Store role assignments as window metadata keyed by
-  stable pane IDs; clearing assignments must not stop any process.
+  current managed window and opt-in managed worker replacement on Linux. Store
+  role assignments as window metadata keyed by stable pane IDs; clearing
+  assignments must not stop any process. `workmux/team_worker.py` is an internal
+  Linux pane entry point: record the leader's process incarnation and exec the
+  trusted launcher with literal arguments.
 - `workmux/pi_reload.py`: one-shot requests to registered Pi runtimes using
   pane-scoped tmux options and a `wait-for` wakeup, never terminal input.
 - `workmux/agent_hooks.py`: best-effort Codex/Claude command-hook handling. Keep
@@ -116,10 +119,14 @@
   neither report state nor emit escapes in non-interactive/RPC modes.
 - Pi reload is opt-in and fixed to `/reload`. Recheck readiness in Pi, discard
   expired requests, and require a matching runtime acknowledgment for `Applied`.
+- Managed teams check pane and process ownership before replacing workers. Never
+  act on a missing or repurposed pane. Publish the PID pair only after verifying
+  both launches in the same committed generation. Pi registers a matching launch
+  only at interactive process startup, independently of activity and reload.
 
 ## Development and validation
 
-Use Python 3.10+ with `curses`, tmux 3.3+, and the declared Python dependencies.
+Use Python 3.10+ with `curses`, tmux 3.8+, and the declared Python dependencies.
 A standard virtual environment is sufficient; Nix is not required:
 
 ```sh
@@ -147,8 +154,8 @@ python3 -m pip install -e .
   schema checks have been exercised with OpenCode 1.18.34, Codex 0.146.0, and
   Claude Code 2.1.223 on Linux. Tests cover event payloads and private tmux state
   reporting; model-backed end-to-end sessions have not been validated.
-- Integration coverage has been exercised with tmux 3.6a and 3.8 on Linux; the
-  pinned flake has been built and tested on `aarch64-linux`. Do not imply other
+- Integration coverage has been exercised with tmux 3.8 on Linux; the pinned
+  flake has been built and tested on `aarch64-linux`. Do not imply other
   tmux versions, platforms, or terminal notification implementations have been
   validated without testing them.
 - Check `git diff --check` before finishing. Update human-facing documentation

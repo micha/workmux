@@ -76,7 +76,7 @@ def servers(*, prefix, **_):
         return []
 
 
-def _paths(prefix: str, *, include_sockets: bool):
+def _paths(prefix: str, *, files=None):
     parent, _, basename = prefix.rpartition("/")
     directory = Path(os.path.expanduser(parent or ("/" if prefix.startswith("/") else ".")))
     leading = prefix[:len(prefix) - len(basename)]
@@ -87,7 +87,7 @@ def _paths(prefix: str, *, include_sockets: bool):
                 continue
             if entry.is_dir():
                 result.append(f"{leading}{entry.name}/")
-            elif include_sockets and entry.is_socket():
+            elif files is not None and files(entry):
                 result.append(f"{leading}{entry.name}")
     except OSError:
         pass
@@ -95,8 +95,12 @@ def _paths(prefix: str, *, include_sockets: bool):
 
 
 def directories(*, prefix, **_):
-    return _paths(prefix, include_sockets=False)
+    return _paths(prefix)
 
 
 def sockets(*, prefix, **_):
-    return _paths(prefix, include_sockets=True)
+    return _paths(prefix, files=Path.is_socket)
+
+
+def executables(*, prefix, **_):
+    return _paths(prefix, files=lambda entry: entry.is_file() and os.access(entry, os.X_OK))

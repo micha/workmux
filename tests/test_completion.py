@@ -57,8 +57,13 @@ class BashCompletionTests(unittest.TestCase):
         return {value.removesuffix(" ") for value in result.stdout.split("\0") if value}
 
     def test_commands_options_choices_and_directories(self):
-        self.assertEqual(self.complete("workmux team "), {"new", "status", "refresh", "clear"})
+        self.assertEqual(self.complete("workmux team "), {"new", "reset", "status", "refresh", "clear"})
         self.assertEqual(self.complete("workmux team status --pa"), {"--pane"})
+        self.assertEqual(self.complete("workmux team status --j"), {"--json"})
+        self.assertEqual(self.complete("workmux team new review --l"), {"--launcher"})
+        self.assertEqual(self.complete("workmux team new review --p"), {"--profile"})
+        self.assertEqual(self.complete("workmux team reset --p"), {"--profile"})
+        self.assertEqual(self.complete("workmux team reset --profile "), set())
         self.assertEqual(self.complete("workmux install p"), {"pi"})
         self.assertEqual(self.complete("workmux layout main-v"), {"main-vertical", "main-vertical-mirrored"})
         (self.root / "repo space").mkdir()
@@ -66,6 +71,15 @@ class BashCompletionTests(unittest.TestCase):
         for argument in ("workspace new --dir ", "workspace new --dir=", "install pi --agent-dir "):
             with self.subTest(argument=argument):
                 self.assertEqual(self.complete(f"workmux {argument}repo"), {r"repo\ space/"})
+
+    def test_team_launcher_completes_only_directories_and_executables(self):
+        launcher = self.root / "launch worker"
+        launcher.touch(mode=0o700)
+        (self.root / "launch tools").mkdir()
+        (self.root / "launch docs").touch(mode=0o600)
+        for separator in (" ", "="):
+            self.assertEqual(self.complete(f"workmux team new review --launcher{separator}./launch"),
+                             {r"./launch\ worker", r"./launch\ tools/"})
 
     def test_missing_server_is_quiet_and_not_started(self):
         socket = self.root / "missing-socket"

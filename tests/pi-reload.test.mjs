@@ -1,4 +1,4 @@
-// Exercise the Pi extension and its mailbox against a private tmux server.
+// Exercise the Pi extension's reload mailbox and team registration on a private tmux server.
 // Pi's lifecycle and command dispatch are stubbed: no model or real TUI needed.
 import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
@@ -16,6 +16,10 @@ const socket = join(directory, "reload ,;$.sock");
 const tokenOption = "@workmux-pi-reload-token";
 const requestOption = "@workmux-pi-reload-request";
 const resultOption = "@workmux-pi-reload-result";
+const expectedLaunchOption = "@workmux_team_expected_launch";
+const teamRegistrationOption = "@workmux_team_registration";
+const launch = "a".repeat(32);
+const startup = { reason: "startup" };
 const commandName = "workmux-internal-reload";
 const tmux = (...args) => execFileSync("tmux", ["-S", socket, ...args], {
   encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 2500,
@@ -56,6 +60,8 @@ let queued = false;
 let draft = "";
 let reloads = 0;
 let failReload = false;
+let failRegistration = false;
+let registrationAttempts = 0;
 let deferDispatch = false;
 let deferred;
 let beforeDispatch = () => {};
@@ -86,6 +92,10 @@ function load() {
       : [],
     async exec(command, args, options) {
       if (command === "workmux") return { code: 0, stdout: "" };
+      if (args.at(-1).includes(teamRegistrationOption)) {
+        registrationAttempts++;
+        if (failRegistration) throw new Error("tmux not available");
+      }
       assert.equal(command, "tmux");
       assert.deepEqual(args.slice(0, 2), ["-S", socket]);
       const waiting = args[2] === "wait-for";
@@ -122,6 +132,7 @@ function load() {
 }
 
 const realWrite = process.stdout.write;
+const terminalWrites = [];
 const ttyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 try {
   tmux("-f", "/dev/null", "new-session", "-d", "-s", "pi-reload-test", "sleep 60");
@@ -129,20 +140,72 @@ try {
   process.env.TMUX = `${socket},123,0`;
   process.env.TMUX_PANE = pane;
   Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
-  process.stdout.write = () => true;
+  process.stdout.write = (chunk) => { terminalWrites.push(chunk); return true; };
 
   runtime = load();
+  process.env.WORKMUX_TEAM_LAUNCH_ID = launch;
+  set(expectedLaunchOption, launch);
   for (const mode of ["rpc", "print", "json"]) {
-    await runtime.fire("session_start", { reason: "startup" }, { ...ctx, mode });
+    await runtime.fire("session_start", startup, { ...ctx, mode });
     assert.equal(get(tokenOption), "");
+    assert.equal(get(teamRegistrationOption), "");
   }
-  await runtime.fire("session_start", { reason: "startup" }, { ...ctx, hasUI: false });
+  await runtime.fire("session_start", startup, { ...ctx, hasUI: false });
+  Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
+  await runtime.fire("session_start", startup);
+  Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
   assert.equal(get(tokenOption), "");
+  assert.equal(get(teamRegistrationOption), "");
   assert.equal(waiters, 0);
-  await runtime.fire("session_start", { reason: "startup" });
+
+  delete process.env.WORKMUX_TEAM_LAUNCH_ID;
+  await runtime.fire("session_start", startup);
   const token = get(tokenOption);
   assert.match(token, /^[0-9a-f]{32}$/);
   assert.equal(waiters, 1);
+  assert.equal(get(teamRegistrationOption), "");
+
+  process.env.WORKMUX_TEAM_LAUNCH_ID = launch;
+  for (const reason of ["reload", "new", "resume", "fork"]) {
+    await runtime.fire("session_start", { reason });
+    assert.equal(get(teamRegistrationOption), "");
+  }
+  unset(expectedLaunchOption);
+  await runtime.fire("session_start", startup);
+  assert.equal(get(teamRegistrationOption), "");
+  set(expectedLaunchOption, "b".repeat(32));
+  await runtime.fire("session_start", startup);
+  assert.equal(get(teamRegistrationOption), "");
+
+  set(expectedLaunchOption, launch);
+  const beforeMalformed = registrationAttempts;
+  for (const [variable, value] of [
+    ["WORKMUX_TEAM_LAUNCH_ID", `${launch}\n`],
+    ["WORKMUX_TEAM_LAUNCH_ID", `${launch} ; display-message`],
+    ["TMUX_PANE", `${pane}\n`],
+    ["TMUX_PANE", `${pane} ; display-message`],
+    ["TMUX", `${socket},123,0\n`],
+  ]) {
+    const saved = process.env[variable];
+    process.env[variable] = value;
+    await runtime.fire("session_start", startup);
+    process.env[variable] = saved;
+    assert.equal(get(teamRegistrationOption), "");
+  }
+  assert.equal(registrationAttempts, beforeMalformed);
+  failRegistration = true;
+  await runtime.fire("session_start", startup);
+  failRegistration = false;
+  assert.equal(get(teamRegistrationOption), "");
+  await runtime.fire("session_start", startup);
+  assert.equal(get(teamRegistrationOption), `${launch}:${process.pid}`);
+  const firstRegistration = `${launch}:${process.pid + 1}`;
+  set(teamRegistrationOption, firstRegistration);
+  await runtime.fire("session_start", startup);
+  assert.equal(get(teamRegistrationOption), firstRegistration);
+  assert.equal(get(tokenOption), token);
+  assert.equal(waiters, 1);
+  assert.deepEqual(terminalWrites, []);
 
   await runtime.invoke(""); // A direct command is not a mailbox request.
   assert.equal(reloads, 0);
@@ -208,6 +271,8 @@ try {
   // start must not accept another process's marker.
   await runtime.fire("session_shutdown", { reason: "new" });
   assert.equal(get(tokenOption), "");
+  assert.equal(get(teamRegistrationOption), firstRegistration);
+  unset(teamRegistrationOption);
   const fakeId = nextId();
   set(requestOption, `${token}:${fakeId}:${expire()}`);
   set(resultOption, `${fakeId}:reloading:${process.pid + 1}`);
@@ -219,6 +284,7 @@ try {
   await resultIs(`${request()}:applied`);
   await dispatch;
   assert.equal(reloads, 2);
+  assert.equal(get(teamRegistrationOption), "");
   const fresh = get(tokenOption);
   assert.match(fresh, /^[0-9a-f]{32}$/);
   assert.notEqual(fresh, old);
@@ -239,4 +305,4 @@ try {
   try { tmux("kill-server"); } catch { /* already stopped */ }
   rmSync(directory, { recursive: true, force: true });
 }
-console.log("PASS: Pi reload mailbox and lifecycle checks");
+console.log("PASS: Pi reload mailbox, lifecycle, and team registration checks");
