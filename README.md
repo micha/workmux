@@ -385,6 +385,35 @@ target selects a workspace with that name.
 
 Run `workmux --help` or a subcommand's help for full syntax and JSON output options.
 
+### Create a workspace interactively
+
+Run `workmux workspace new --interactive` in a terminal with Python's `readline`
+module. Tab completes directories, `~` expands, and spaces in paths don't need
+quotes. Leave the directory blank to use the current directory (or the `--dir`
+value). Leave the name blank to use the resolved directory's basename; enter a
+custom name if the basename isn't a valid workspace name. Missing directories
+are created after both prompts. Ctrl-C cancels.
+
+If the name and resolved directory match an existing workspace, the interactive
+command opens that workspace without creating anything. If the name is already
+used for a different directory, choose a different name.
+
+On the current tmux server, the interactive command switches the invoking
+session's client to the workspace. It requires exactly one attached client in
+that session. Outside tmux, add `--attach` to open the workspace; otherwise the
+command does not attach a client.
+
+To open the prompts in a tmux popup, optionally add this alias to your tmux
+config (choose another index if 100 is in use):
+
+```tmux
+set -s command-alias[100] 'wn=display-popup -EE -T "New workspace" -d "#{pane_current_path}" workmux workspace new --interactive'
+```
+
+Press prefix, then `:`, type `wn`, and press Enter. The popup starts in the
+active pane's directory; directory completion works inside the popup, not at
+tmux's `:` prompt.
+
 ### Optional isolated-server workflow
 
 From outside tmux, create a workspace on a separate server:

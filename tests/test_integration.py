@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 import fcntl
+from importlib.util import find_spec
 import json
 import os
 from pathlib import Path
@@ -386,6 +387,54 @@ class TmuxIntegrationTests(unittest.TestCase):
         pane = self.tmux.run("new-session", "-d", "-s", name, "-x", "120", "-y", "40",
                              "-P", "-F", "#{pane_id}", *command)
         return self.tmux.pane(pane).session, pane
+
+    @unittest.skipUnless(shutil.which("workmux") and find_spec("readline"), "workmux with readline is required")
+    def test_workspace_popup_completes_directories_and_switches_its_client(self):
+        self.check_workspace_popup(reuse=False)
+
+    @unittest.skipUnless(shutil.which("workmux") and find_spec("readline"), "workmux with readline is required")
+    def test_workspace_popup_switches_to_existing_workspace_without_resetting_it(self):
+        self.check_workspace_popup(reuse=True)
+
+    def check_workspace_popup(self, *, reuse):
+        cwd = Path(self.temporary.name) / 'pane with spaces; $literal'
+        cwd.mkdir()
+        project = cwd / 'Project With Spaces'
+        project.mkdir()
+        (cwd / 'Project-file').touch()
+        with patch.dict(os.environ, INPUTRC=os.devnull, EDITRC=os.devnull):
+            native = self.tmux.run('new-session', '-d', '-s', 'native', '-c', str(cwd),
+                                   '-P', '-F', '#{session_id}', 'sleep 60')
+        self.tmux.run('source-file', '-', input=(
+            'set -s command-alias[100] \'wn=display-popup -EE -T "New workspace" '
+            '-d "#{pane_current_path}" workmux workspace new --interactive\'\n'
+        ))
+        self.tmux.run('set-option', '-g', 'prefix', 'C-b')
+        self.tmux.run('bind-key', ':', 'command-prompt', '-p', 'Test command:')
+        existing = None
+        if reuse:
+            existing = self.tmux.new_workspace(project.name, str(project))
+            active = self.tmux.new_tab(self.tmux.pane(existing + ':').id, 'keep this tab')
+            self.tmux.run('rename-session', '-t', existing, 'renamed')
+        output = bytearray()
+        master, _, client = self.attach(native, output)
+        other_session, _ = self.native_session('other', 'sleep 60')
+        _, _, other_client = self.attach(other_session)
+        os.write(master, b'\x02:')
+        eventually(lambda: b'Test command:' in output)
+        os.write(master, b'wn\r')
+        eventually(lambda: b'Directory [.]: ' in output, 'directory prompt did not appear')
+        os.write(master, b'Proj\t\r')
+        eventually(lambda: b'Name [Project With Spaces]:' in output, 'Tab did not complete the directory')
+        os.write(master, b'\r')
+        workspace = eventually(lambda: next((w for w in self.tmux.workspaces() if w.label == project.name), None))
+        self.assertEqual(workspace.directory, str(project))
+        eventually(lambda: self.client_session(client) == workspace.id, 'popup client did not switch workspaces')
+        self.assertEqual(self.client_session(other_client), other_session)
+        if existing is not None:
+            self.assertEqual(workspace.id, existing)
+            self.assertEqual(self.tmux.pane(existing + ':').id, active)
+            self.assertEqual(self.tmux.workspaces(), [workspace])
 
     def test_attach_identifies_each_client_and_waits_for_its_session(self):
         first, _ = self.native_session("first")

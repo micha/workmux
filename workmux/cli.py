@@ -3,7 +3,6 @@
 import argparse
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 
@@ -34,9 +33,12 @@ def parser() -> argparse.ArgumentParser:
     workspace = commands.add_parser("workspace", help="Create and list workspaces")
     actions = workspace.add_subparsers(dest="action", required=True)
     new = actions.add_parser("new", help="Create a workspace with one tab and sidebar")
-    new.add_argument("name")
-    new.add_argument("--dir", default=str(Path.cwd()))
-    new.add_argument("--attach", action="store_true")
+    creation = new.add_mutually_exclusive_group(required=True)
+    creation.add_argument("name", nargs="?", help="Workspace name")
+    creation.add_argument("--interactive", action="store_true",
+                          help="Prompt for a directory and name, then open or create the workspace")
+    new.add_argument("--dir", default=".", help="Workspace directory (prompt default in interactive mode)")
+    new.add_argument("--attach", action="store_true", help="Attach after creating the workspace (outside tmux only)")
     listing = actions.add_parser("list", help="List managed workspaces in sidebar order")
     listing.add_argument("--json", action="store_true")
     select = actions.add_parser("select", help="Select a workspace for an attached client")
@@ -119,6 +121,23 @@ def resolve_workspace(tmux: Tmux, target: str | None, *, index: int | None = Non
     return matches[0]
 
 
+def workspace_creation_client(tmux: Tmux, session_number: str) -> str:
+    # A pane may have moved since TMUX was set. Popups have a separate tty and
+    # can inherit a stale TMUX_PANE; for them use the session ID in TMUX instead.
+    tty = os.ttyname(sys.stdin.fileno())
+    panes = tmux.run("list-panes", "-a", "-F", "#{pane_tty}\t#{session_id}").splitlines()
+    sessions = {line.partition("\t")[2] for line in panes if line.startswith(tty + "\t")}
+    source = "$" + session_number if session_number.isascii() and session_number.isdecimal() else ""
+    if len(sessions) == 1:
+        source, = sessions
+    if not source or (sessions and source not in sessions):
+        raise WorkmuxError("Cannot identify the current tmux session.")
+    clients = tmux.run("list-clients", "-t", source, "-F", "#{client_name}").splitlines()
+    if len(clients) != 1:
+        raise WorkmuxError("Interactive workspace creation requires exactly one attached client in this session.")
+    return clients[0]
+
+
 def attach(tmux: Tmux, session: str) -> int:
     if os.environ.get("TMUX"):
         raise WorkmuxError("Already inside tmux. Use workspace select, or attach from a terminal outside tmux.")
@@ -145,9 +164,11 @@ def main(argv: list[str] | None = None) -> int:
             from .agent_hooks import run_hook
             run_hook(args.harness, args.pid)
             return 0
+        current_tmux = os.environ.get("TMUX", "").rsplit(",", 2)
+        current_socket = current_tmux[0]
         socket = args.socket
-        if not socket and not args.server and os.environ.get("TMUX"):
-            socket = os.environ["TMUX"].rsplit(",", 2)[0]
+        if not socket and not args.server:
+            socket = current_socket or None
         tmux = Tmux(server=args.server or "workmux", socket=socket)
         if args.command == "enable":
             result = tmux.enable(require_pane(args), args.client)
@@ -172,10 +193,24 @@ def main(argv: list[str] | None = None) -> int:
             tmux.dispatch(args.binding, require_pane(args))
         elif args.command == "workspace":
             if args.action == "new":
-                if args.attach and os.environ.get("TMUX"):
-                    raise WorkmuxError("Use --attach from outside tmux, or omit it to create a detached workspace.")
-                session = tmux.new_workspace(args.name, args.dir)
+                if args.attach and current_socket:
+                    raise WorkmuxError("Use --attach only from outside tmux.")
+                name, directory = args.name, args.dir
+                client = None
+                if args.interactive:
+                    from .workspace_prompt import prompt_workspace
+                    selection = prompt_workspace(directory)
+                    if selection is None:
+                        return 0
+                    name, directory = selection
+                    if socket and socket == current_socket:
+                        session_number = current_tmux[2] if len(current_tmux) == 3 else ""
+                        client = workspace_creation_client(tmux, session_number)
+                session = tmux.new_workspace(name, directory, create_directory=args.interactive,
+                                             reuse_existing=args.interactive)
                 print(session, flush=True)
+                if client is not None:
+                    tmux.run("switch-client", "-c", client, "-t", session)
                 if args.attach:
                     return attach(tmux, session)
             elif args.action == "list":

@@ -249,12 +249,19 @@ def validate_label(label: str) -> str:
     return label
 
 
-def validate_directory(directory: str) -> str:
+def _workspace_path(directory: str) -> Path:
     path = Path(directory).expanduser().resolve()
-    if not path.is_dir():
-        raise WorkmuxError(f"Directory does not exist: {path}")
     if any(character in str(path) for character in "\t\r\n"):
         raise WorkmuxError("Workspace directories cannot contain tabs or newlines.")
+    return path
+
+
+def validate_directory(directory: str, *, create: bool = False) -> str:
+    path = _workspace_path(directory)
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    if not path.is_dir():
+        raise WorkmuxError(f"Directory does not exist: {path}")
     return str(path)
 
 
@@ -500,14 +507,23 @@ class Tmux:
             restarted += result == "1"
         return restarted
 
-    def new_workspace(self, label: str, directory: str) -> str:
+    def new_workspace(self, label: str, directory: str, *, create_directory: bool = False,
+                      reuse_existing: bool = False) -> str:
         label = validate_label(label)
-        directory = validate_directory(directory)
-        existing = self.workspaces()
+        existing = [workspace for workspace in self.workspaces() if workspace.label == label]
+        if existing:
+            if not reuse_existing:
+                raise WorkmuxError(f"Workspace already exists: {label}")
+            path = str(_workspace_path(directory))
+            matches = [workspace for workspace in existing if workspace.directory == path]
+            if not matches:
+                raise WorkmuxError(f"Workspace {label!r} already exists with a different directory.")
+            if len(matches) > 1:
+                raise WorkmuxError(f"Multiple workspaces named {label!r} use this directory.")
+            return matches[0].id
+        directory = validate_directory(directory, create=create_directory)
         server_has_sessions = bool(self.run("list-sessions", "-F", "#{session_id}", missing_ok=True))
         dedicated = self.run("show-options", "-sqv", "@workmux-configured", missing_ok=True) == "1"
-        if any(workspace.label == label for workspace in existing):
-            raise WorkmuxError(f"Workspace already exists: {label}")
         name = label
         # Keep the bootstrap window large enough even when no client is attached.
         content = self.run("new-session", "-d", "-s", name, "-c", tmux_argument(directory),
