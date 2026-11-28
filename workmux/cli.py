@@ -75,7 +75,6 @@ def parser() -> argparse.ArgumentParser:
     team = commands.add_parser("team", help="Launch and manage a three-pane Pi team")
     teams = team.add_subparsers(dest="action", required=True)
     new_team = teams.add_parser("new", help="Start a team in the current window from its foreground shell")
-    new_team.add_argument("name", help="Team name (does not rename the window)")
     new_team.add_argument(
         "--launcher", help="Worker launcher executable for managed teams on Linux (requires --profile)",
     ).completer = completion.executables
@@ -285,7 +284,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.action == "new":
                 if (args.launcher is None) != (args.profile is None):
                     raise WorkmuxError("Pass --launcher and --profile together to start a managed team.")
-                new_team(tmux, os.environ.get("TMUX_PANE"), args.name, launcher=args.launcher, profile=args.profile)
+                new_team(tmux, os.environ.get("TMUX_PANE"), launcher=args.launcher, profile=args.profile)
             elif args.action == "reset":
                 print(reset_team(tmux, source, args.profile))
             elif args.action == "status":

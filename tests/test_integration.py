@@ -350,14 +350,14 @@ IFS= read -r input
         root = Path(self.temporary.name)
         directory = root / "repo space; ' $literal #{session_name};"
         directory.mkdir()
-        border = '#{?#{E:@workmux-team-role},[#{@workmux-team-name}: #{E:@workmux-team-role}],#{pane_title}}'
+        border = '#{?#{E:@workmux-team-role},[#{E:@workmux-team-role}],#{pane_title}}'
         self.tmux.run("set-option", "-g", "pane-border-status", "top", ";",
                       "set-option", "-g", "pane-border-format", border)
         original = self.tmux.run("display-message", "-p", "-t", master.id, "#{window_id} #{window_name} #{pane_pid}")
         pty_master, _, _ = self.attach(session)
         returned = root / "original-shell-returned"
         command = (f"cd {shlex.quote(str(directory))} && PATH={shlex.quote(str(executable.parent))}:\"$PATH\" "
-                   f"workmux team new 'Test Team'; printf returned > {shlex.quote(str(returned))}\r")
+                   f"workmux team new; printf returned > {shlex.quote(str(returned))}\r")
         os.write(pty_master, command.encode())
 
         def started():
@@ -378,7 +378,10 @@ IFS= read -r input
         self.assertTrue(all(column[2] == columns[0][2] for column in columns))
         widths = [column[1] for column in columns[1:]]
         self.assertLessEqual(max(widths) - min(widths), 1)
-        status = f"Team: Test Team\nmaster\t{master.id}\nslave 1\t{first}\nslave 2\t{second}"
+        data = self.tmux.run("show-options", "-wqv", "-t", master.window, "@workmux-team")
+        self.assertEqual(json.loads(data), {"panes": [master.id, first, second]})
+        self.assertEqual(self.tmux.run("show-options", "-wqv", "-t", master.window, "@workmux-team-name"), "")
+        status = f"master\t{master.id}\nslave 1\t{first}\nslave 2\t{second}"
         self.assertEqual(team_status(self.tmux, sidebar.id), status)
         self.assertEqual(team_status(self.tmux, sidebar.id, as_json=True), 'null')
 
@@ -388,9 +391,9 @@ IFS= read -r input
         def pane_title(pane):
             return self.tmux.run("display-message", "-p", "-t", pane, "#{pane_title}")
 
-        self.assertEqual(pane_border(master.id), "[Test Team: master]")
-        self.assertEqual(pane_border(first), "[Test Team: slave 1]")
-        self.assertEqual(pane_border(second), "[Test Team: slave 2]")
+        self.assertEqual(pane_border(master.id), "[master]")
+        self.assertEqual(pane_border(first), "[slave 1]")
+        self.assertEqual(pane_border(second), "[slave 2]")
         self.assertEqual(pane_border(sidebar.id), pane_title(sidebar.id))
 
         # Exiting Pi returns to the same foreground shell; neither slave is stopped.
@@ -398,10 +401,10 @@ IFS= read -r input
         eventually(returned.exists, "the original shell did not resume")
         self.assertEqual(team_status(self.tmux, master.id), status)
         with self.assertRaisesRegex(WorkmuxError, "already has a team"):
-            new_team(self.tmux, master.id, "Duplicate")
+            new_team(self.tmux, master.id)
         self.tmux.run("swap-pane", "-d", "-s", first, "-t", second)
         self.assertEqual(team_status(self.tmux, master.id), status)
-        self.assertEqual(pane_border(first), "[Test Team: slave 1]")
+        self.assertEqual(pane_border(first), "[slave 1]")
         self.tmux.run("break-pane", "-d", "-s", second)
         self.assertEqual(team_status(self.tmux, master.id), status + " (missing)")
         self.assertEqual(pane_border(second), pane_title(second))
@@ -415,34 +418,36 @@ IFS= read -r input
         with self.assertRaisesRegex(WorkmuxError, "no team"):
             team_status(self.tmux, master.id)
 
-    def test_team_refresh_advertises_formats_for_an_existing_team(self):
+    def test_team_refresh_publishes_roles_and_removes_the_legacy_name(self):
         _, master, _ = self.workspace()
         first = self.tmux.split(master.id, "right")
         second = self.tmux.split(first, "right")
         data = json.dumps({"name": "Existing Team", "panes": [master.id, first, second]})
-        self.tmux.run("set-option", "-w", "-t", master.window, "@workmux-team", data)
+        self.tmux.run("set-option", "-w", "-t", master.window, "@workmux-team", data, ";",
+                      "set-option", "-w", "-t", master.window, "@workmux-team-name", "Existing Team")
         pane_format = "#{@workmux-team-name}:#{E:@workmux-team-role}"
         before = self.tmux.run("list-panes", "-t", master.window, "-F", "#{pane_id} #{pane_pid}")
-        self.assertEqual(self.tmux.run("display-message", "-p", "-t", second, pane_format), ":")
+        self.assertEqual(self.tmux.run("display-message", "-p", "-t", second, pane_format), "Existing Team:")
         self.assertEqual(main(["--socket", self.socket, "team", "refresh", "--pane", master.id]), 0)
-        self.assertEqual(self.tmux.run("display-message", "-p", "-t", second, pane_format), "Existing Team:slave 2")
+        self.assertEqual(self.tmux.run("display-message", "-p", "-t", second, pane_format), ":slave 2")
         self.assertEqual(self.tmux.run("list-panes", "-t", master.window, "-F", "#{pane_id} #{pane_pid}"), before)
+        self.assertEqual(team_status(self.tmux, master.id), f"master\t{master.id}\nslave 1\t{first}\nslave 2\t{second}")
 
     def test_team_preflight_rejects_noninteractive_or_split_windows(self):
         _, master, _ = self.workspace()
         original = self.tmux.run("display-message", "-p", "-t", master.id, "#{window_layout}")
         with patch("workmux.teams.os.ttyname", return_value="not the pane tty"):
             with self.assertRaisesRegex(WorkmuxError, "foreground shell"):
-                new_team(self.tmux, master.id, "Test")
+                new_team(self.tmux, master.id)
         with patch("workmux.teams._require_foreground"), patch("workmux.teams.shutil.which", return_value=None):
             with self.assertRaisesRegex(WorkmuxError, "pi was not found"):
-                new_team(self.tmux, master.id, "Test")
+                new_team(self.tmux, master.id)
         self.assertEqual(self.tmux.run("display-message", "-p", "-t", master.id, "#{window_layout}"), original)
 
         self.tmux.split(master.id, "down")
         split = self.tmux.run("display-message", "-p", "-t", master.id, "#{window_layout}")
         with self.assertRaisesRegex(WorkmuxError, "exactly one live content pane"):
-            new_team(self.tmux, master.id, "Test")
+            new_team(self.tmux, master.id)
         self.assertEqual(self.tmux.run("display-message", "-p", "-t", master.id, "#{window_layout}"), split)
         with self.assertRaisesRegex(WorkmuxError, "no team"):
             team_status(self.tmux, master.id)
@@ -455,12 +460,12 @@ IFS= read -r input
         with (patch("workmux.teams._require_foreground"), patch("workmux.teams.shutil.which", return_value=str(executable)),
               patch("workmux.teams.os.execv", side_effect=OSError("launch failed"))):
             with self.assertRaisesRegex(OSError, "launch failed"):
-                new_team(self.tmux, master.id, "Test")
+                new_team(self.tmux, master.id)
         self.assertEqual({pane.id for pane in self.tmux.panes(master.window)}, {master.id, sidebar.id})
         self.assertEqual(self.tmux.run("display-message", "-p", "-t", master.id, "#{window_layout}"), original)
         self.assertTrue(self.tmux.pane(master.id).zoomed)
         self.assertEqual(self.tmux.run("display-message", "-p", "-t", master.id,
-                                       "#{@workmux-team-name}:#{E:@workmux-team-role}"), ":")
+                                       "#{E:@workmux-team-role}"), "")
         with self.assertRaisesRegex(WorkmuxError, "no team"):
             team_status(self.tmux, master.id)
 
@@ -522,7 +527,7 @@ raise SystemExit(subprocess.call([sys.executable, {str(pi)!r}, profile]))
         pty_master, _, _ = self.attach(session)
         returned = root / 'shell-returned'
         command = (f"cd {shlex.quote(str(directory))} && PATH={shlex.quote(str(executable.parent))}:\"$PATH\" "
-                   f"workmux team new Managed --launcher {shlex.quote(str(launcher))} --profile {shlex.quote(initial)}; "
+                   f"workmux team new --launcher {shlex.quote(str(launcher))} --profile {shlex.quote(initial)}; "
                    f"printf '%s' \"$?\" > {shlex.quote(str(returned))}\r")
         os.write(pty_master, command.encode())
         if returns:
@@ -535,6 +540,7 @@ raise SystemExit(subprocess.call([sys.executable, {str(pi)!r}, profile]))
         except AssertionError as error:
             raise AssertionError(self.tmux.run('capture-pane', '-p', '-t', master.id)) from error
         metadata = json.loads(self.tmux.run('show-options', '-wqv', '-t', master.window, '@workmux-team'))
+        self.assertNotIn('name', metadata)
         return master, pty_master, metadata['panes'][1:], directory
 
     def team_cli(self, pane, *args, asynchronous=False):
@@ -759,13 +765,18 @@ teams.reset_team(Tmux(socket=sys.argv[1]), sys.argv[2], 'never-started')
 
     def test_managed_clear_keeps_processes_and_edited_options(self):
         master, _, workers, _ = self.managed_team()
-        self.tmux.run('set-option', '-w', '-t', master.window, '@workmux-team-role', 'edited', ';',
+        metadata = json.loads(self.tmux.run('show-options', '-wqv', '-t', master.window, '@workmux-team'))
+        metadata['name'] = 'Old Team'
+        self.tmux.run('set-option', '-w', '-t', master.window, '@workmux-team', json.dumps(metadata), ';',
+                      'set-option', '-w', '-t', master.window, '@workmux-team-name', 'edited', ';',
+                      'set-option', '-w', '-t', master.window, '@workmux-team-role', 'edited', ';',
                       'set-option', '-p', '-t', workers[1], 'remain-on-exit', 'off')
         before = self.tmux.run('list-panes', '-t', master.window, '-F', '#{pane_id} #{pane_pid}')
         result = self.team_cli(master.id, 'clear')
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, '', ''))
         self.assertEqual(self.tmux.run('list-panes', '-t', master.window, '-F', '#{pane_id} #{pane_pid}'), before)
         self.assertEqual(self.tmux.run('show-options', '-wqv', '-t', master.window, '@workmux-team-role'), 'edited')
+        self.assertEqual(self.tmux.run('show-options', '-wqv', '-t', master.window, '@workmux-team-name'), 'edited')
         self.assertEqual(self.tmux.run('show-options', '-pqv', '-t', workers[1], 'remain-on-exit'), 'off')
         self.assertEqual(self.tmux.run('show-options', '-pqv', '-t', workers[1], '@workmux_team_expected_launch'), '')
         with self.assertRaisesRegex(WorkmuxError, 'no team'):
@@ -2110,6 +2121,35 @@ teams.reset_team(Tmux(socket=sys.argv[1]), sys.argv[2], 'never-started')
         eventually(lambda: 'fallback tab' in capture())
         self.assertIsNone(self.tmux.attention_tabs()[0].title)
         self.assertEqual(self.tmux.pane(content.id).window, content.window)
+
+    def test_sidebar_uses_trimmed_pane_border_text_for_each_agent(self):
+        session, first, sidebar = self.workspace()
+        second = self.tmux.split(first.id, 'right')
+        titles = {first.id: 'first agent', second: 'second agent'}
+        for pane, title in titles.items():
+            self.tmux.run('select-pane', '-t', pane, '-T', title)
+            self.tmux.report_agent_state(pane, 'working', os.getpid())
+        self.tmux.run('set-option', '-g', 'mouse', 'on', ';',
+                      'set-option', '-w', '-t', first.window, 'pane-border-status', 'top')
+        self.attach(session)
+
+        def agent_labels():
+            return {agent.pane: agent.title for tab in self.tmux.sidebar_snapshot().activity.tabs
+                    for agent in tab.agents}
+
+        def set_border(fmt):
+            self.tmux.run('set-option', '-w', '-t', first.window, 'pane-border-format', fmt)
+
+        self.assertEqual(agent_labels(), titles)  # Stock borders include the index and mouse controls.
+        set_border(' \t #[fg=red][#{pane_title}]#[default] \r\n ')
+        self.assertEqual(agent_labels(), {pane: f'[{title}]' for pane, title in titles.items()})
+        eventually(lambda: all(f':[{title}]' in self.tmux.run('capture-pane', '-p', '-t', sidebar.id)
+                               for title in titles.values()))
+        set_border(' \t #[fg=red] #[default] \n ')
+        self.assertEqual(agent_labels(), titles)
+        set_border(' \t [#{pane_title}] ')
+        self.tmux.run('set-option', '-w', '-t', first.window, 'pane-border-status', 'off')
+        self.assertEqual(agent_labels(), titles)
 
     def test_split_agents_keep_own_titles_and_select_each_pane(self):
         session, content, sidebar = self.workspace()

@@ -53,6 +53,8 @@ class SidebarSnapshotTests(unittest.TestCase):
         directory = str(self.path / "checkout ' with spaces")
         self.tmux.run("set-option", "-w", "-t", window, "@workmux-checkout", json.dumps(directory))
         self.tmux.run("set-option", "-p", "-t", first + ":", "@workmux-agent", '{"state":"working"}')
+        self.tmux.run("set-option", "-w", "-t", window, "pane-border-status", "bottom", ";",
+                      "set-option", "-w", "-t", window, "pane-border-format", " [#{session_name}] ")
         pane = self.tmux.run("split-window", "-hd", "-t", window, "-P", "-F", "#{pane_id}", "sleep 60")
         self.tmux.run("set-option", "-p", "-t", pane, "@workspace-sidebar", "1")
         with patch.object(self.tmux, "run", wraps=self.tmux.run) as run:
@@ -63,8 +65,8 @@ class SidebarSnapshotTests(unittest.TestCase):
         self.assertEqual(snapshot.workspaces[0].checkout_max_depth, 0)
         self.assertEqual(snapshot.activity, self.tmux.activity_snapshot())
         self.assertEqual(snapshot.activity.publisher, pane)
-        self.assertEqual({(tab.session, tab.id, tab.state) for tab in snapshot.activity.tabs},
-                         {(first, window, "working"), (second, window, "working")})
+        self.assertEqual({(tab.session, tab.id, tab.state, tab.agents[0].title) for tab in snapshot.activity.tabs},
+                         {(first, window, "working", "[beta]"), (second, window, "working", "[alpha]")})
         self.assertEqual(snapshot.checkout_windows, self.tmux.checkout_tabs())
         self.assertEqual(snapshot.checkout_windows, {(first, directory): window, (second, directory): window})
 

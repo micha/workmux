@@ -433,7 +433,7 @@ tmux's `:` prompt.
 ### Start a Pi team in the current tab
 
 From the foreground shell in a workmux tab with a sidebar and exactly one live
-content pane, run `workmux team new review`. Put `pi` on that shell's `PATH`
+content pane, run `workmux team new`. Put `pi` on that shell's `PATH`
 first; no workmux agent plugin is required. The command doesn't run from a
 popup, a key binding, or an already-running Pi session.
 
@@ -457,7 +457,7 @@ worker launcher and the workmux Pi extension installed or updated
 (`workmux install pi`), opt in from the foreground shell:
 
 ```sh
-workmux team new review --launcher /path/to/launch-worker --profile design
+workmux team new --launcher /path/to/launch-worker --profile design
 ```
 
 Workmux saves the launcher and the shell's current directory and waits for both
@@ -495,22 +495,37 @@ refuses to replace a missing or repurposed worker, including after an
 interruption that leaves ownership or teardown uncertain. `team clear` only
 forgets the team; it does not stop any process.
 
-#### Show team names and roles on pane borders
+#### Mark team windows in the status bar
 
-To show `[review: master]` and similar labels on team panes, add this to
+To display `∴` instead of the window name when a team is assigned, add this to
 `~/.tmux.conf`:
 
 ```tmux
-set -g pane-border-status top
-set -g pane-border-format '#{?#{E:@workmux-team-role},[#{@workmux-team-name}: #{E:@workmux-team-role}],#{pane_title}}'
+set -g window-status-format ' #I:#{?@workmux-team,∴,#{window_name}}#F '
+set -g window-status-current-format ' #I:#{?@workmux-team,∴,#{window_name}}#F '
 ```
 
-`#{@workmux-team-name}` is the window's team name. `#{E:@workmux-team-role}`
-expands to the current pane's role, or is empty for a non-member pane. The
-example falls back to the normal pane title for those panes. Workmux doesn't
-change your border settings. For a team created before these variables were
-available, run `workmux team refresh` in its tab to publish them without
-restarting Pi.
+The window index and native tmux flags stay visible: `2:∴*` is the current
+window, and `2:∴-` is the previously selected window. This does not rename
+windows; `workmux team clear` brings back the normal label. If you already
+customize the formats, replace just `#W` with `#{?@workmux-team,∴,#{window_name}}`
+to keep your styles and activity indicators.
+
+#### Show team roles on pane borders
+
+To show `[master]` and similar labels on team panes, add this to `~/.tmux.conf`:
+
+```tmux
+set -g pane-border-status top
+set -g pane-border-format '#{?#{E:@workmux-team-role},[#{E:@workmux-team-role}],#{pane_title}}'
+```
+
+`#{E:@workmux-team-role}` expands to the current pane's role, or is empty for a
+non-member pane. The example falls back to the normal pane title for those panes.
+With this format, the sidebar also labels agent rows with their roles, for
+example `✦ 2.1:[master]`. Workmux doesn't change your border settings. If an
+older team is missing the role format, run `workmux team refresh` in its tab
+without restarting Pi.
 
 ### Optional isolated-server workflow
 
@@ -767,6 +782,12 @@ changing `status-interval`, even when it is zero.
   the previous layout unchanged.
 - Detaching preserves state. Killing the server loses sessions and workmux state;
   restoring them from disk is not supported.
+
+Agent rows use the expanded `pane-border-format` when the pane border status
+is shown. The sidebar trims surrounding whitespace and ignores tmux styles.
+If the border text is blank, disabled, or uses tmux's stock format, the row
+uses the pane title, then the window name. Shell command substitutions (`#()`)
+are not run for sidebar labels.
 
 Sidebars default to 36 columns and shrink in narrow windows; use a terminal at
 least 40 columns wide. Truncated sidebar lines use `…`. To change the preferred

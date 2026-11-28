@@ -60,8 +60,8 @@ class BashCompletionTests(unittest.TestCase):
         self.assertEqual(self.complete("workmux team "), {"new", "reset", "status", "refresh", "clear"})
         self.assertEqual(self.complete("workmux team status --pa"), {"--pane"})
         self.assertEqual(self.complete("workmux team status --j"), {"--json"})
-        self.assertEqual(self.complete("workmux team new review --l"), {"--launcher"})
-        self.assertEqual(self.complete("workmux team new review --p"), {"--profile"})
+        self.assertEqual(self.complete("workmux team new --l"), {"--launcher"})
+        self.assertEqual(self.complete("workmux team new --p"), {"--profile"})
         self.assertEqual(self.complete("workmux team reset --p"), {"--profile"})
         self.assertEqual(self.complete("workmux team reset --profile "), set())
         self.assertEqual(self.complete("workmux install p"), {"pi"})
@@ -78,7 +78,7 @@ class BashCompletionTests(unittest.TestCase):
         (self.root / "launch tools").mkdir()
         (self.root / "launch docs").touch(mode=0o600)
         for separator in (" ", "="):
-            self.assertEqual(self.complete(f"workmux team new review --launcher{separator}./launch"),
+            self.assertEqual(self.complete(f"workmux team new --launcher{separator}./launch"),
                              {r"./launch\ worker", r"./launch\ tools/"})
 
     def test_missing_server_is_quiet_and_not_started(self):

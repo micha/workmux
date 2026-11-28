@@ -53,7 +53,7 @@ allowed directories. This is a workflow guardrail, not a security boundary.
 ## CLI and launcher contract
 
 ```sh
-workmux team new review --launcher /path/to/launch-worker --profile design
+workmux team new --launcher /path/to/launch-worker --profile design
 workmux team reset --profile implementation
 workmux team status --json
 ```
@@ -64,7 +64,7 @@ workmux team status --json
   the existing foreground-shell requirement. Wait for both workers to register
   before replacing that job with the master Pi. On setup failure keep the
   original shell and roll back only still-owned panes created by that call.
-  Plain `team new NAME` keeps its existing behavior.
+  Plain `team new` starts an unmanaged team.
 - `team reset`: the master invokes this through Pi's `bash` tool. Resolve the
   original master pane via `TMUX` and `TMUX_PANE`; don't require the calling
   subprocess to be in the foreground, and don't send terminal input. Reuse

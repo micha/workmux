@@ -244,10 +244,18 @@ class InputTests(unittest.TestCase):
             self.assertIn("server for the master pane has changed", stderr.getvalue())
             reset.assert_not_called()
 
+    def test_team_new_rejects_a_team_name(self):
+        with patch("workmux.cli.Tmux") as tmux, patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            with self.assertRaises(SystemExit) as error:
+                main(["team", "new", "review"])
+            self.assertEqual(error.exception.code, 2)
+            self.assertIn("unrecognized arguments: review", stderr.getvalue())
+            tmux.assert_not_called()
+
     def test_team_new_requires_both_managed_options(self):
         for flag in ("--launcher", "--profile"):
             with self.subTest(flag=flag), patch("workmux.teams.new_team") as new, \
                     patch("sys.stderr", new_callable=io.StringIO) as stderr:
-                self.assertEqual(main(["team", "new", "review", flag, "value"]), 1)
+                self.assertEqual(main(["team", "new", flag, "value"]), 1)
                 self.assertIn("--launcher and --profile together", stderr.getvalue())
                 new.assert_not_called()

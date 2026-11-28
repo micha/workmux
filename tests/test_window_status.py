@@ -10,7 +10,7 @@ from workmux.status import INDICATOR_OPTION, WindowIndicators
 def row(pane, *, session="$0", window="@0", sidebar="", dead="0", managed="1",
         indicator="", flags="*", report="", name="work", title="", pane_index=""):
     return (f"{managed}\t{indicator}\t{session}\t{window}\t1\t{flags}\t{pane}\t"
-            f"{sidebar}\t{dead}\t{report}\t{pane_index}\t{title}\t{name}")
+            f"{sidebar}\t{dead}\t{report}\t{pane_index}\t{title}\t\t{name}")
 
 
 class ActivitySnapshotTests(unittest.TestCase):

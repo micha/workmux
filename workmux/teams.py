@@ -16,13 +16,13 @@ import sys
 import time
 from uuid import uuid4
 
-from .core import TMUX_EXECUTABLE, Tmux, WorkmuxError, quote_tmux, tmux_argument, validate_label
+from .core import TMUX_EXECUTABLE, Tmux, WorkmuxError, quote_tmux, tmux_argument
 from .layouts import parse_layout, protect_sidebar, split_sizes
 from .team_worker import EXPECTED, LEADER, OWNER, REFUSED, REGISTRATION, SPAWN, START, process_stat
 
 
 _OPTION = "@workmux-team"
-_NAME_OPTION = "@workmux-team-name"
+_LEGACY_NAME_OPTION = "@workmux-team-name"
 _ROLE_OPTION = "@workmux-team-role"
 _ROLES = ("master", "slave 1", "slave 2")
 _MANAGED = "@workmux_team_id"
@@ -54,17 +54,16 @@ class _Managed:
     directory: str
 
 
-def _team(tmux: Tmux, window: str) -> tuple[str, list[str], _Managed | None]:
+def _team(tmux: Tmux, window: str) -> tuple[list[str], _Managed | None, str | None]:
     return _decode_team(_metadata(tmux, window))
 
 
-def _decode_team(raw: str) -> tuple[str, list[str], _Managed | None]:
+def _decode_team(raw: str) -> tuple[list[str], _Managed | None, str | None]:
     if not raw:
         raise WorkmuxError("This window has no team.")
     try:
         data = json.loads(raw)
-        name, ids = data["name"], data["panes"]
-        validate_label(name)
+        ids = data["panes"]
         if (not isinstance(ids, list) or len(ids) != len(_ROLES)
                 or not all(re.fullmatch(r"%[0-9]+", pane) for pane in ids)
                 or len(set(ids)) != len(ids)):
@@ -77,10 +76,12 @@ def _decode_team(raw: str) -> tuple[str, list[str], _Managed | None]:
                 raise ValueError("invalid managed team configuration")
     except (KeyError, TypeError, ValueError, WorkmuxError) as error:
         raise WorkmuxError("Invalid team metadata. Use workmux team clear to remove it.") from error
-    return name, ids, managed
+    # Older windows may still hold a label; keep it only to clean up the old option.
+    legacy_name = data.get("name")
+    return ids, managed, legacy_name if isinstance(legacy_name, str) else None
 
 
-def _set_formats(window: str, name: str, ids: list[str]) -> tuple[str, ...]:
+def _role_format(ids: list[str]) -> str:
     # Evaluate the role against the current pane ID *in this window*. A pane
     # moved out immediately stops matching, with no hooks or stale pane options.
     role_format = ""
@@ -88,17 +89,19 @@ def _set_formats(window: str, name: str, ids: list[str]) -> tuple[str, ...]:
         # A literal %3 (and higher IDs) can be expanded as a time format.
         same_pane = "#{==:#{s/^%//:pane_id}," + pane.removeprefix("%") + "}"
         role_format += "#{?" + same_pane + "," + role + ",}"
-    return ("set-option", "-w", "-t", window, _NAME_OPTION, name, ";",
-            "set-option", "-w", "-t", window, _ROLE_OPTION, role_format)
+    return role_format
 
 
-def _clear(tmux: Tmux, window: str, formats: tuple[str, str] | None) -> None:
-    commands = ["set-option", "-wqu", "-t", window, _OPTION]
-    if formats:
-        for option, value in zip((_NAME_OPTION, _ROLE_OPTION), formats):
-            if tmux.run("show-options", "-wqv", "-t", window, option) == value:
-                commands.extend((";", "set-option", "-wqu", "-t", window, option))
-    tmux.run(*commands)
+def _unset_owned(tmux: Tmux, window: str, option: str, value: str | None) -> tuple[str, ...]:
+    if value and tmux.run("show-options", "-wqv", "-t", window, option) == value:
+        return ";", "set-option", "-wqu", "-t", window, option
+    return ()
+
+
+def _clear(tmux: Tmux, window: str, role_format: str | None = None, legacy_name: str | None = None) -> None:
+    tmux.run("set-option", "-wqu", "-t", window, _OPTION,
+             *_unset_owned(tmux, window, _ROLE_OPTION, role_format),
+             *_unset_owned(tmux, window, _LEGACY_NAME_OPTION, legacy_name))
 
 
 def _require_foreground(tty: str) -> None:
@@ -112,16 +115,15 @@ def _require_foreground(tty: str) -> None:
     raise WorkmuxError("Run team new directly in the foreground shell of the master pane.")
 
 
-def new_team(tmux: Tmux, source: str | None, name: str, *, launcher: str | None = None,
+def new_team(tmux: Tmux, source: str | None, *, launcher: str | None = None,
              profile: str | None = None) -> None:
     if not source:
         raise WorkmuxError("Run team new from a shell inside a workmux pane.")
     if (launcher is None) != (profile is None):
         raise WorkmuxError("Use --launcher and --profile together.")
-    name = validate_label(name)
     window = _window(tmux, source)
     if launcher is None:
-        _new_team(tmux, window, source, name, None, None)
+        _new_team(tmux, window, source, None, None)
     else:
         _require_linux()
         resolved = shutil.which(launcher)
@@ -130,10 +132,10 @@ def new_team(tmux: Tmux, source: str | None, name: str, *, launcher: str | None 
         managed = _Managed(uuid4().hex, str(Path(resolved).resolve()), os.getcwd())
         _preflight_paths(managed, profile)
         with _lock(tmux, window):
-            _new_team(tmux, window, source, name, managed, profile)
+            _new_team(tmux, window, source, managed, profile)
 
 
-def _new_team(tmux: Tmux, window: str, source: str, name: str, managed: _Managed | None,
+def _new_team(tmux: Tmux, window: str, source: str, managed: _Managed | None,
               profile: str | None) -> None:
     if _metadata(tmux, window):
         raise WorkmuxError("This window already has a team. Use workmux team status or team clear.")
@@ -162,12 +164,12 @@ def _new_team(tmux: Tmux, window: str, source: str, name: str, managed: _Managed
         raise WorkmuxError(str(error)) from error
 
     if managed:
-        _new_managed(tmux, window, source, name, managed, profile, executable, left, right,
+        _new_managed(tmux, window, source, managed, profile, executable, left, right,
                      content[0].zoomed)
         return
 
     created: list[str] = []
-    formats = None
+    role_format = None
 
     def reserve(target: str, width: int) -> None:
         created.append(tmux.run("split-window", "-hd", "-l", str(width), "-c", directory,
@@ -179,10 +181,10 @@ def _new_team(tmux: Tmux, window: str, source: str, name: str, managed: _Managed
         reserve(source, left + right + 1)
         reserve(created[0], right)
         ids = [source, *created]
-        data = json.dumps({"name": name, "panes": ids})
-        commands = _set_formats(window, name, ids)
-        formats = (name, commands[-1])  # Clean up even if the batch only partially applies.
-        tmux.run("set-option", "-w", "-t", window, _OPTION, data, ";", *commands)
+        data = json.dumps({"panes": ids})
+        role_format = _role_format(ids)  # Clean up even if the batch only partially applies.
+        tmux.run(*_set(window, _OPTION, data, window=True), ";",
+                 *_set(window, _ROLE_OPTION, role_format, window=True))
         command = "exec " + shlex.quote(executable)
         tmux.run("respawn-pane", "-t", created[0], "-e", path, command, ";",
                  "respawn-pane", "-t", created[1], "-e", path, command, ";",
@@ -190,9 +192,9 @@ def _new_team(tmux: Tmux, window: str, source: str, name: str, managed: _Managed
         # Replace only this foreground job, not the pane's original shell.
         os.execv(executable, [executable])
     except (WorkmuxError, OSError, KeyboardInterrupt):
-        if formats:
+        if role_format is not None:
             with suppress(WorkmuxError, OSError):
-                _clear(tmux, window, formats)
+                _clear(tmux, window, role_format)
         for pane in reversed(created):
             with suppress(WorkmuxError, OSError):
                 tmux.run("kill-pane", "-t", pane)
@@ -312,7 +314,7 @@ def _snapshot(tmux: Tmux, window: str, team: _Managed, *, ids: list[str] | None 
         if owner != team.id:
             return None, {}
         if not panes:
-            if ids is not None and (not assignments or _decode_team(assignments)[1:] != (ids, team)):
+            if ids is not None and (not assignments or _decode_team(assignments)[:2] != (ids, team)):
                 return None, {}
             state = _Generation.parse(raw)
         pane = _Pane(*fields)
@@ -608,7 +610,7 @@ def reset_team(tmux: Tmux, source: str, profile: str) -> str:
     _require_linux()
     window = _window(tmux, source)
     with _lock(tmux, window):
-        _, ids, team = _team(tmux, window)
+        ids, team, _ = _team(tmux, window)
         if not team or source != ids[0]:
             raise WorkmuxError("Run team reset from the managed team's original master pane.")
         _preflight_paths(team, profile)
@@ -618,10 +620,10 @@ def reset_team(tmux: Tmux, source: str, profile: str) -> str:
         return _run_generation(tmux, window, ids, team, state, panes, profile)
 
 
-def _new_managed(tmux: Tmux, window: str, source: str, name: str, team: _Managed, profile: str,
+def _new_managed(tmux: Tmux, window: str, source: str, team: _Managed, profile: str,
                  executable: str, left: int, right: int, zoomed: bool) -> None:
     created = {}
-    formats = None
+    role_format = None
     data = None
     try:
         target = source
@@ -635,11 +637,10 @@ def _new_managed(tmux: Tmux, window: str, source: str, name: str, team: _Managed
                      _command(*_stamp(pane, owner, "")))
             target = pane
         ids = [source, *created]
-        commands = _set_formats(window, name, ids)
-        formats = (name, commands[-1])
-        data = json.dumps({"name": name, "panes": ids, "managed": vars(team)})
+        role_format = _role_format(ids)
+        data = json.dumps({"panes": ids, "managed": vars(team)})
         tmux.run(*_set(window, _OPTION, data, window=True), ";", *_set(window, _MANAGED, team.id, window=True),
-                 ";", *commands)
+                 ";", *_set(window, _ROLE_OPTION, role_format, window=True))
         deadline = time.monotonic() + _STOP_TIMEOUT
         while True:
             _, panes = _snapshot(tmux, window, team, ids=ids)
@@ -655,7 +656,7 @@ def _new_managed(tmux: Tmux, window: str, source: str, name: str, team: _Managed
     except (WorkmuxError, OSError, KeyboardInterrupt):
         for pane, owner in reversed(created.items()):
             with suppress(WorkmuxError, OSError):
-                if formats:
+                if role_format is not None:
                     _, panes = _snapshot(tmux, window, team)
                     if pane in panes and not _owner_error(panes[pane], team):
                         _checked(tmux, pane, _guard(window, team, panes[pane]), f"kill-pane -t {pane}")
@@ -669,17 +670,18 @@ def _new_managed(tmux: Tmux, window: str, source: str, name: str, team: _Managed
                     if os.fsencode(f"{SPAWN}={owner}") in env:
                         guard = _all(_eq("window_id", window), _marker(owner), _eq("pane_pid", pid))
                         _checked(tmux, pane, guard, f"kill-pane -t {pane}")
-        if formats:
+        if role_format is not None:
             with suppress(WorkmuxError, OSError):
                 if _metadata(tmux, window) == data:
-                    _clear_managed(tmux, window, [source, *created], team, formats)
+                    _clear_managed(tmux, window, [source, *created], team, role_format)
         if zoomed:
             with suppress(WorkmuxError, OSError):
                 tmux.run("if-shell", "-F", "-t", source, "#{!=:#{window_zoomed_flag},1}", f"resize-pane -Z -t {source}")
         raise
 
 
-def _clear_managed(tmux: Tmux, window: str, ids: list[str], team: _Managed, formats: tuple[str, str]) -> None:
+def _clear_managed(tmux: Tmux, window: str, ids: list[str], team: _Managed,
+                   role_format: str, legacy_name: str | None = None) -> None:
     panes = {}
     with suppress(WorkmuxError):
         _, panes = _snapshot(tmux, window, team, read_generation=False)
@@ -694,14 +696,14 @@ def _clear_managed(tmux: Tmux, window: str, ids: list[str], team: _Managed, form
                 commands.extend(("set-option", "-pqu", "-t", pane.id, option, ";"))
             with suppress(WorkmuxError):
                 _checked(tmux, pane.id, _guard(window, team, pane), _command(*commands[:-1]))
-    _clear(tmux, window, formats)
+    _clear(tmux, window, role_format, legacy_name)
     tmux.run("if-shell", "-F", "-t", window, _eq(_MANAGED, team.id),
              _command("set-option", "-wqu", "-t", window, _STATE, ";", "set-option", "-wqu", "-t", window, _MANAGED))
 
 
 def team_status(tmux: Tmux, source: str, *, as_json: bool = False) -> str:
     window = _window(tmux, source)
-    name, ids, managed = _team(tmux, window)
+    ids, managed, _ = _team(tmux, window)
     pair = None
     if managed:
         state, panes = _snapshot(tmux, window, managed, ids=ids)
@@ -712,7 +714,7 @@ def team_status(tmux: Tmux, source: str, *, as_json: bool = False) -> str:
     if as_json:
         return json.dumps(pair)
     present = {pane.id for pane in tmux.panes(window) if not pane.sidebar}
-    rows = [f"Team: {name}"]
+    rows = []
     for role, pane in zip(_ROLES, ids):
         status = "" if pane in present else " (missing)"
         if pair and role in pair:
@@ -725,8 +727,9 @@ def team_status(tmux: Tmux, source: str, *, as_json: bool = False) -> str:
 
 def refresh_team(tmux: Tmux, source: str) -> None:
     window = _window(tmux, source)
-    name, ids, _ = _team(tmux, window)
-    tmux.run(*_set_formats(window, name, ids))
+    ids, _, legacy_name = _team(tmux, window)
+    tmux.run(*_set(window, _ROLE_OPTION, _role_format(ids), window=True),
+             *_unset_owned(tmux, window, _LEGACY_NAME_OPTION, legacy_name))
 
 
 def clear_team(tmux: Tmux, source: str) -> None:
@@ -742,12 +745,12 @@ def clear_team(tmux: Tmux, source: str) -> None:
 
 def _clear_current(tmux: Tmux, window: str) -> None:
     try:
-        name, ids, managed = _team(tmux, window)
+        ids, managed, legacy_name = _team(tmux, window)
     except WorkmuxError:
-        _clear(tmux, window, None)
+        _clear(tmux, window)
         return
-    formats = (name, _set_formats(window, name, ids)[-1])
+    role_format = _role_format(ids)
     if managed:
-        _clear_managed(tmux, window, ids, managed, formats)
+        _clear_managed(tmux, window, ids, managed, role_format, legacy_name)
     else:
-        _clear(tmux, window, formats)
+        _clear(tmux, window, role_format, legacy_name)

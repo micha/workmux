@@ -79,10 +79,15 @@ def _agent_state(value: str, alive: dict[int, bool]) -> str | None:
     return state
 
 
+_PANE_BORDER_VISIBLE = ("#{?#{m:*-floating,#{pane-border-status}},#{pane_floating_flag},"
+                        "#{!=:#{pane-border-status},off}}")
+# list-panes evaluates formats in the pane's context without running #() jobs.
+_PANE_BORDER_TEXT = ("#{?#{&&:#{@workmux-agent}," + _PANE_BORDER_VISIBLE + "},"
+                     "#{s/[\t\r\n]/ /;T:pane-border-format},}")
 _ACTIVITY_FORMAT = (
     "#{session_id}\t#{window_id}\t#{window_index}\t#{window_flags}\t#{pane_id}"
     "\t#{@workspace-sidebar}\t#{pane_dead}\t#{@workmux-agent}"
-    "\t#{pane_index}\t#{s/[\t\r\n]/ /:pane_title}\t#{s/[\r\n]/ /:window_name}"
+    "\t#{pane_index}\t#{s/[\t\r\n]/ /:pane_title}\t" + _PANE_BORDER_TEXT + "\t#{s/[\r\n]/ /:window_name}"
 )
 
 
@@ -164,17 +169,28 @@ def _activity_snapshot(output: str) -> ActivitySnapshot:
         if len(fields) != 3:
             continue
         managed, indicator, row = fields
-        panes = row.split("\t", 10)
-        if len(panes) != 11:
+        panes = row.split("\t", 11)
+        if len(panes) != 12:
             continue
         rows.append(row)
         if managed == "1":
-            session, window, _, _, pane, sidebar, dead, _, _, _, _ = panes
+            session, window, _, _, pane, sidebar, dead = panes[:7]
             indicators.setdefault((session, window), indicator)
             if sidebar == "1" and dead != "1":
                 publishers.add(pane)
     publisher = min(publishers, key=lambda pane: int(pane[1:]), default=None)
     return ActivitySnapshot(_attention_tabs("\n".join(rows)), publisher, indicators)
+
+
+def _agent_title(pane_index: str, title: str, border: str) -> str | None:
+    # The stock border repeats the number and may include mouse controls.
+    stock = f'{pane_index}#[default] "{title}"'
+    base = border.strip().removeprefix("#[reverse]")
+    if base == stock or base.startswith(stock + "#[align=right]#[range=control|"):
+        return title.strip() or None
+    # tmux styles are not text; doubled hashes escape literal style markers.
+    plain = re.sub(r"##|#\[[^\]]*\]", lambda match: "#" if match[0] == "##" else "", border)
+    return plain.strip() or title.strip() or None
 
 
 def _attention_tabs(output: str) -> list[Tab]:
@@ -183,15 +199,14 @@ def _attention_tabs(output: str) -> list[Tab]:
     agents = {}
     alive = {}
     for line in output.split("\n"):
-        fields = line.split("\t", 10)
-        if len(fields) != 11:
+        fields = line.split("\t", 11)
+        if len(fields) != 12:
             continue
-        session, window, index, flags, pane, sidebar, dead, report, pane_index, title, name = fields
+        session, window, index, flags, pane, sidebar, dead, report, pane_index, title, border, name = fields
         try:
             index = int(index)
         except ValueError:
             continue
-        pane_index = int(pane_index) if pane_index.isdecimal() else None
         key = (session, window)
         native = "alert" if any(flag in flags for flag in "!#~") else "idle"
         current = tabs.get(key, Tab(session, window, index, name, native))
@@ -212,13 +227,13 @@ def _attention_tabs(output: str) -> list[Tab]:
         if state in ("attention", "finished") and native != "alert":
             state = None
         if state:
-            agents.setdefault(key, []).append(
-                Tab(session, window, index, name, state, pane,
-                    roots=tuple(pane_roots) if any(root is not None for root in pane_roots) else (),
-                    title=title.strip() or None, pane_index=pane_index))
-        if state and _AGENT_PRIORITY[state] > _AGENT_PRIORITY.get(current.state, 0):
-            current = Tab(session, window, index, name, state, pane,
-                          title=title.strip() or None, pane_index=pane_index)
+            agent = Tab(session, window, index, name, state, pane,
+                        roots=tuple(pane_roots) if any(root is not None for root in pane_roots) else (),
+                        title=_agent_title(pane_index, title, border),
+                        pane_index=int(pane_index) if pane_index.isdecimal() else None)
+            agents.setdefault(key, []).append(agent)
+            if _AGENT_PRIORITY[state] > _AGENT_PRIORITY.get(current.state, 0):
+                current = agent
         tabs[key] = current
     return sorted((replace(tab, agents=tuple(sorted(agents.get(key, ()),
                                key=lambda agent: -_AGENT_PRIORITY[agent.state])),
