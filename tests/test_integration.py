@@ -929,6 +929,36 @@ teams.reset_team(Tmux(socket=sys.argv[1]), sys.argv[2], 'never-started')
         self.assertEqual(len(self.tmux.panes(other_window)), 2)
         self.assertEqual(sum(item.sidebar for item in self.tmux.panes(other_window)), 1)
 
+    def test_last_content_exit_honors_renumber_windows(self):
+        session, content, _ = self.workspace()
+        self.tmux.run("set-option", "-t", session, "base-index", "1", ";",
+                      "set-option", "-t", session, "renumber-windows", "on", ";",
+                      "move-window", "-r", "-t", session + ":")
+        closing = self.tmux.new_tab(content.id, "closing")
+        kept = self.tmux.new_tab(closing, "kept")
+        kept_window = self.tmux.pane(kept).window
+        target = session + ":" + kept_window
+        self.assertEqual(self.tmux.run("display-message", "-p", "-t", target, "#{window_index}"), "3")
+
+        self.tmux.run("send-keys", "-t", closing, "exit", "Enter")
+        eventually(lambda: self.tmux.run("list-windows", "-t", session, "-F", "#{window_id}")
+                   == f"{content.window}\n{kept_window}")
+        self.assertEqual(self.tmux.run("display-message", "-p", "-t", target, "#{window_index}"), "2")
+
+    def test_last_content_exit_closes_shared_tab_in_all_sessions(self):
+        session, content, _ = self.workspace()
+        closing = self.tmux.new_tab(content.id, "closing")
+        shared = self.tmux.pane(closing).window
+        other, other_pane = self.native_session("other")
+        other_window = self.tmux.pane(other_pane).window
+        self.tmux.run("link-window", "-d", "-s", session + ":" + shared, "-t", other + ":")
+        self.assertIn(shared, self.tmux.run("list-windows", "-t", other, "-F", "#{window_id}").splitlines())
+
+        self.tmux.run("send-keys", "-t", closing, "exit", "Enter")
+        eventually(lambda: self.tmux.run("list-windows", "-t", session, "-F", "#{window_id}") == content.window)
+        self.assertEqual(self.tmux.run("list-windows", "-t", other, "-F", "#{window_id}"), other_window)
+        self.assertEqual(self.tmux.pane(other_pane).session, other)
+
     def test_background_tab_closes_without_changing_current_tab(self):
         session, content, _ = self.workspace()
         current = self.tmux.new_tab(content.id, "current")

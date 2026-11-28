@@ -480,14 +480,18 @@ class Tmux:
 
     def close_empty_window(self, pane: Pane) -> None:
         """Close an owned sidebar-only tab, including the workspace's final tab."""
-        # Recheck in tmux's command queue: a content pane may have been added since
-        # the sidebar's snapshot. Unlink only this session's window, not other links.
+        # A shared sidebar's pane ID can resolve through a non-workmux session.
+        managed_link = "#{&&:#{==:#{@workmux},1},#{==:#{window_id}," + pane.window + "}}"
+        sessions = self.run("list-windows", "-a", "-f", managed_link, "-F", "#{session_id}").splitlines()
+        if not sessions:
+            return
+        window = sessions[0] + ":" + pane.window
+        target = window + "." + pane.id
+        # Recheck ownership and pane count in tmux before closing all links.
         condition = ("#{&&:#{==:#{@workmux},1},"
                      "#{&&:#{==:#{@workspace-sidebar},1},#{==:#{window_panes},1}}}")
-        window = pane.session + ":" + pane.window
-        target = window + "." + pane.id
         self.run("if-shell", "-F", "-t", target, condition,
-                 "unlink-window -k -t " + shlex.quote(window))
+                 "kill-window -t " + shlex.quote(window))
 
     def add_sidebar(self, content_id: str) -> str:
         pane = self.pane(content_id)

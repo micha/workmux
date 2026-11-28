@@ -349,15 +349,17 @@ alerts need no integration, but their monitoring settings remain your responsibi
 
 ### Closing tabs and workspaces
 
-When the last content pane in a tab closes, workmux removes that tab's sidebar
-and closes the tab. Other tabs in the workspace stay open. Closing the final tab
-ends the workspace; there is no empty placeholder and no shell is respawned.
+When the last content pane in a tab closes, workmux closes the whole tab,
+including its sidebar. If the tab is linked to other tmux sessions, it closes in
+all of them. Other tabs stay open. Closing a workspace's final tab ends the
+workspace; no shell is respawned.
 
 This also applies when the last shell exits naturally or is closed with tmux's
 pane-kill command. Cleanup happens on the sidebar's next refresh, normally within
 400 ms. Your tmux settings still apply: `remain-on-exit` can retain a dead content
-pane, and `detach-on-destroy` controls whether a client detaches or switches to
-another session when the workspace ends.
+pane, `renumber-windows` controls whether the remaining tabs are renumbered, and
+`detach-on-destroy` controls whether a client detaches or switches to another
+session when the workspace ends.
 
 ## CLI helpers
 
