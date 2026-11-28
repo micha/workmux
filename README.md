@@ -432,31 +432,33 @@ Press prefix, then `:`, type `wn`, and press Enter. The popup starts in the
 active pane's directory; directory completion works inside the popup, not at
 tmux's `:` prompt.
 
-### Start a Pi team in the current tab
+### Start a Pi team in a new tab
 
-From the foreground shell in a workmux tab with a sidebar and exactly one live
-content pane, run `workmux team new`. Put `pi` on that shell's `PATH`
-first; no workmux agent plugin is required. The command doesn't run from a
-popup, a key binding, or an already-running Pi session.
+From a shell in a workmux workspace, run `workmux team new`. Put `pi` on that
+shell's `PATH` first; no workmux agent plugin is required for a plain team.
 
-Workmux leaves the sidebar in place and starts Pi in three side-by-side content
-panes: master, slave 1, and slave 2. The master is the original pane and keeps
-focus. All three sessions start in the shell's current directory and share the
-same files, but not chat history. Workers use the tmux session environment with
-the invoking shell's `PATH`. There is no automatic delegation or edit isolation.
+Workmux inserts the team tab immediately after the calling tab and selects its
+master pane. The original shell and layout stay intact. The team tab has a
+sidebar and three side-by-side Pi panes: master, slave 1, and slave 2. All three
+use the tmux session environment with the caller's `PATH` and working directory.
+They share files, not chat history. There is no automatic delegation or edit
+isolation.
 
-Run `workmux team status` from the tab to see the role assignments. They follow
-pane IDs, not pane positions or running processes. Exiting the master Pi returns
-you to the original shell without stopping the other sessions. Closing a role's
-pane or moving it to another tab marks it missing. `workmux team clear` forgets
-the assignments without closing any panes; close extra panes before creating
-another team in that tab.
+Run `workmux team status` from the team tab to see the role assignments. They
+follow pane IDs, not pane positions or running processes. Closing a role's pane
+or moving it to another tab marks it missing. Within the same workspace, tmux's
+`move-window` and `swap-window` can reorder whole tabs without changing teams.
+
+Close the team tab to end the team and remove its metadata. A plain team tab
+also closes automatically after the last Pi pane exits; exiting the master
+alone doesn't stop the others. tmux handles tab renumbering according to the
+session's `renumber-windows` setting. No `workmux team clear` is needed.
 
 #### Replace managed workers between phases (Linux)
 
 Managed workers require Linux with `/proc` and pidfd support. With a trusted
 worker launcher and the workmux Pi extension installed or updated
-(`workmux install pi`), opt in from the foreground shell:
+(`workmux install pi`), opt in when creating a team:
 
 ```sh
 workmux team new --launcher /path/to/launch-worker --profile design
@@ -494,8 +496,10 @@ that the workers are still running when you use them.
 A failed reset reports diagnostics on stderr without a partial pair. You can
 retry explicitly if workmux can still verify pane ownership and teardown. It
 refuses to replace a missing or repurposed worker, including after an
-interruption that leaves ownership or teardown uncertain. `team clear` only
-forgets the team; it does not stop any process.
+interruption that leaves ownership or teardown uncertain. Exited worker panes
+stay available for reset, so close the tab explicitly to end a managed team.
+`team clear` remains available for older in-place teams; it only forgets the
+team and does not stop any process.
 
 #### Mark team windows in the status bar
 
@@ -509,9 +513,8 @@ set -g window-status-current-format ' #I:#{?@workmux-team,∴,#{window_name}}#F 
 
 The window index and native tmux flags stay visible: `2:∴*` is the current
 window, and `2:∴-` is the previously selected window. This does not rename
-windows; `workmux team clear` brings back the normal label. If you already
-customize the formats, replace just `#W` with `#{?@workmux-team,∴,#{window_name}}`
-to keep your styles and activity indicators.
+windows. If you already customize the formats, replace just `#W` with
+`#{?@workmux-team,∴,#{window_name}}` to keep your styles and activity indicators.
 
 #### Show team roles on pane borders
 

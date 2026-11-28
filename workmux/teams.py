@@ -1,4 +1,4 @@
-"""Launch and label a three-pane Pi team in the caller's existing window."""
+"""Launch and manage three-pane Pi teams in dedicated workspace tabs."""
 
 import base64
 from contextlib import contextmanager, suppress
@@ -17,7 +17,7 @@ import time
 from uuid import uuid4
 
 from .core import TMUX_EXECUTABLE, Tmux, WorkmuxError, quote_tmux, tmux_argument
-from .layouts import parse_layout, protect_sidebar, split_sizes
+from .layouts import split_sizes
 from .team_worker import EXPECTED, LEADER, OWNER, REFUSED, REGISTRATION, SPAWN, START, process_stat
 
 
@@ -104,105 +104,88 @@ def _clear(tmux: Tmux, window: str, role_format: str | None = None, legacy_name:
              *_unset_owned(tmux, window, _LEGACY_NAME_OPTION, legacy_name))
 
 
-def _require_foreground(tty: str) -> None:
-    try:
-        fd = sys.stdin.fileno()
-        if (tty == os.ttyname(fd) == os.ttyname(sys.stdout.fileno())
-                and os.tcgetpgrp(fd) == os.getpgrp()):
-            return
-    except (OSError, ValueError):
-        pass
-    raise WorkmuxError("Run team new directly in the foreground shell of the master pane.")
-
-
 def new_team(tmux: Tmux, source: str | None, *, launcher: str | None = None,
              profile: str | None = None) -> None:
     if not source:
-        raise WorkmuxError("Run team new from a shell inside a workmux pane.")
+        raise WorkmuxError("Run team new from inside a workmux pane.")
     if (launcher is None) != (profile is None):
         raise WorkmuxError("Use --launcher and --profile together.")
-    window = _window(tmux, source)
-    if launcher is None:
-        _new_team(tmux, window, source, None, None)
-    else:
+    caller = tmux.pane(source)
+    tmux.require_workspace(caller.session)
+    executable = shutil.which("pi")
+    if executable is None:
+        raise WorkmuxError("pi was not found on your PATH.")
+    directory = os.getcwd()
+    token = uuid4().hex
+    managed = None
+    if launcher is not None:
         _require_linux()
         resolved = shutil.which(launcher)
         if not resolved:
             raise WorkmuxError(f"Launcher is not executable: {launcher!r}")
-        managed = _Managed(uuid4().hex, str(Path(resolved).resolve()), os.getcwd())
+        managed = _Managed(token, str(Path(resolved).resolve()), directory)
         _preflight_paths(managed, profile)
-        with _lock(tmux, window):
-            _new_team(tmux, window, source, managed, profile)
 
+    start_directory = tmux_argument(directory.replace("#", "##"))  # -c expands tmux formats.
+    window, master = tmux.run("new-window", "-ad", "-t", caller.session + ":" + caller.window,
+                              "-n", "team", "-c", start_directory, "-P", "-F",
+                              "#{window_id}\t#{pane_id}", "").split("\t")
+    target = caller.session + ":" + window
+    empty = _eq("pane_pid", "")
+    owned = {master: empty}
+    path = "PATH=" + os.environ.get("PATH", os.defpath)
+    command = "exec " + shlex.quote(os.path.abspath(executable)) + " # " + token
 
-def _new_team(tmux: Tmux, window: str, source: str, managed: _Managed | None,
-              profile: str | None) -> None:
-    if _metadata(tmux, window):
-        raise WorkmuxError("This window already has a team. Use workmux team status or team clear.")
-    panes = tmux.panes(window)
-    sidebars = [pane for pane in panes if pane.sidebar]
-    content = [pane for pane in panes if not pane.sidebar]
-    if len(content) != 1 or content[0].id != source:
-        raise WorkmuxError("Team creation requires exactly one live content pane: your shell.")
-    if len(sidebars) != 1:
-        raise WorkmuxError("Team creation requires exactly one workmux sidebar.")
-    tty, dead, raw_layout = tmux.run("display-message", "-p", "-t", source,
-                                    "#{pane_tty}\t#{pane_dead}\t#{window_layout}").split("\t")
-    if dead != "0":
-        raise WorkmuxError("Team creation requires exactly one live content pane: your shell.")
-    _require_foreground(tty)
-    executable = shutil.which("pi")
-    if executable is None:
-        raise WorkmuxError("pi was not found on your PATH.")
-    executable = os.path.abspath(executable)
-    directory = tmux_argument(os.getcwd().replace("#", "##"))  # -c expands tmux formats.
-    path = tmux_argument("PATH=" + os.environ.get("PATH", os.defpath))
-    try:
-        layout = protect_sidebar(parse_layout(raw_layout), sidebars[0].id)
-        _, left, right = split_sizes(layout.children[1].width, 3)
-    except ValueError as error:
-        raise WorkmuxError(str(error)) from error
-
-    if managed:
-        _new_managed(tmux, window, source, managed, profile, executable, left, right,
-                     content[0].zoomed)
-        return
-
-    created: list[str] = []
-    role_format = None
-
-    def reserve(target: str, width: int) -> None:
-        created.append(tmux.run("split-window", "-hd", "-l", str(width), "-c", directory,
-                                "-t", target, "-P", "-F", "#{pane_id}", ""))
+    def start_pi(pane: str) -> None:
+        pane_target = target + "." + pane
+        # Plain Pi panes disappear on exit even if the user retains exited panes
+        # elsewhere. Do not use -k: a manually started job is not ours to replace.
+        owned[pane] = "#{||:" + empty + "," + _marker(token) + "}"
+        _checked(tmux, pane_target, empty,
+                 _command(*_set(pane_target, "remain-on-exit", "off"), ";",
+                          "respawn-pane", "-t", pane_target, "-e", path, command))
 
     try:
-        # Reserve both panes before starting Pi. The first split leaves room for
-        # both slaves and the border between them.
-        reserve(source, left + right + 1)
-        reserve(created[0], right)
-        ids = [source, *created]
-        data = json.dumps({"panes": ids})
-        role_format = _role_format(ids)  # Clean up even if the batch only partially applies.
-        tmux.run(*_set(window, _OPTION, data, window=True), ";",
-                 *_set(window, _ROLE_OPTION, role_format, window=True))
-        command = "exec " + shlex.quote(executable)
-        tmux.run("respawn-pane", "-t", created[0], "-e", path, command, ";",
-                 "respawn-pane", "-t", created[1], "-e", path, command, ";",
-                 "select-pane", "-t", source)
-        # Replace only this foreground job, not the pane's original shell.
-        os.execv(executable, [executable])
+        sidebar = tmux.add_sidebar(master)
+        sidebar_pid = tmux.run("display-message", "-p", "-t", target + "." + sidebar, "#{pane_pid}")
+        owned[sidebar] = _all(_eq("@workspace-sidebar", "1"), _eq("pane_pid", sidebar_pid))
+        tmux._ensure_focus_hooks(master)
+        try:
+            _, left, right = split_sizes(tmux.pane(master).width, 3)
+        except ValueError as error:
+            raise WorkmuxError(str(error)) from error
+        widths = (left + right + 1, right)
+        if managed:
+            with _lock(tmux, window):
+                _new_managed(tmux, window, master, managed, profile, widths, owned)
+                start_pi(master)
+        else:
+            ids = [master]
+            for width in widths:
+                pane = tmux.run("split-window", "-hdP", "-l", str(width), "-c", start_directory,
+                                "-t", target + "." + ids[-1], "-F", "#{pane_id}", "")
+                ids.append(pane)
+                owned[pane] = empty
+            tmux.run(*_set(window, _OPTION, json.dumps({"panes": ids}), window=True), ";",
+                     *_set(window, _ROLE_OPTION, _role_format(ids), window=True))
+            for pane in ids:
+                start_pi(pane)
+        tmux.run("select-pane", "-t", target + "." + master, ";", "select-window", "-t", target)
     except (WorkmuxError, OSError, KeyboardInterrupt):
-        if role_format is not None:
-            with suppress(WorkmuxError, OSError):
-                _clear(tmux, window, role_format)
-        for pane in reversed(created):
-            with suppress(WorkmuxError, OSError):
-                tmux.run("kill-pane", "-t", pane)
-        if content[0].zoomed:
-            with suppress(WorkmuxError, OSError):
-                tmux.run("if-shell", "-F", "-t", source, "#{!=:#{window_zoomed_flag},1}",
-                         f"resize-pane -Z -t {source}")
+        with suppress(WorkmuxError, OSError):
+            _discard_new_tab(tmux, target, owned)
         raise
+
+
+def _discard_new_tab(tmux: Tmux, target: str, owned: dict[str, str]) -> None:
+    # In one tmux queue, refuse rollback if someone moved in another pane,
+    # repurposed one we reserved, or linked this tab into another session.
+    pane_owned = "0"
+    for pane, guard in owned.items():
+        pane_owned = "#{?" + _eq("pane_id", pane) + "," + guard + "," + pane_owned + "}"
+    tmux.run("if-shell", "-F", "-t", target,
+             _all(_eq("window_linked", "0"), _eq(f"m:*0*,#{{P:{pane_owned}}}", "0")),
+             _command("kill-window", "-t", target))
 
 
 @dataclass(frozen=True)
@@ -620,64 +603,32 @@ def reset_team(tmux: Tmux, source: str, profile: str) -> str:
         return _run_generation(tmux, window, ids, team, state, panes, profile)
 
 
-def _new_managed(tmux: Tmux, window: str, source: str, team: _Managed, profile: str,
-                 executable: str, left: int, right: int, zoomed: bool) -> None:
-    created = {}
-    role_format = None
-    data = None
-    try:
-        target = source
-        for width in (left + right + 1, right):
-            owner = f"{team.id}.{uuid4().hex}"
-            pane = tmux.run("split-window", "-hdP", "-l", str(width), "-c",
-                            tmux_argument(team.directory.replace("#", "##")), "-t", target, "-F", "#{pane_id}",
-                            "-e", f"{SPAWN}={owner}", *_worker_args(window, owner, "reserve"))
-            created[pane] = owner
-            _checked(tmux, pane, _all(_eq("window_id", window), _marker(owner), _eq("pane_dead", "0")),
-                     _command(*_stamp(pane, owner, "")))
-            target = pane
-        ids = [source, *created]
-        role_format = _role_format(ids)
-        data = json.dumps({"panes": ids, "managed": vars(team)})
-        tmux.run(*_set(window, _OPTION, data, window=True), ";", *_set(window, _MANAGED, team.id, window=True),
-                 ";", *_set(window, _ROLE_OPTION, role_format, window=True))
-        deadline = time.monotonic() + _STOP_TIMEOUT
-        while True:
-            _, panes = _snapshot(tmux, window, team, ids=ids)
-            if all(pane in panes and panes[pane].start for pane in created):
-                break
-            if time.monotonic() >= deadline:
-                raise WorkmuxError("Could not establish ownership of both reserved worker panes.")
-            time.sleep(_POLL)
-        tmux.run("select-pane", "-t", source)
-        _run_generation(tmux, window, ids, team, None, panes, profile)
-        # The lock FD is close-on-exec. Only this foreground job is replaced.
-        os.execv(executable, [executable])
-    except (WorkmuxError, OSError, KeyboardInterrupt):
-        for pane, owner in reversed(created.items()):
-            with suppress(WorkmuxError, OSError):
-                if role_format is not None:
-                    _, panes = _snapshot(tmux, window, team)
-                    if pane in panes and not _owner_error(panes[pane], team):
-                        _checked(tmux, pane, _guard(window, team, panes[pane]), f"kill-pane -t {pane}")
-                        continue
-                # A split can fail before even its reservation stamp is written.
-                # A manual bare respawn repeats argv but not the spawn environment.
-                current_window, pid = tmux.run("display-message", "-p", "-t", pane,
-                                              "#{window_id}\t#{pane_pid}").split("\t")
-                if current_window == window and re.fullmatch(_NUMBER, pid):
-                    env = Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
-                    if os.fsencode(f"{SPAWN}={owner}") in env:
-                        guard = _all(_eq("window_id", window), _marker(owner), _eq("pane_pid", pid))
-                        _checked(tmux, pane, guard, f"kill-pane -t {pane}")
-        if role_format is not None:
-            with suppress(WorkmuxError, OSError):
-                if _metadata(tmux, window) == data:
-                    _clear_managed(tmux, window, [source, *created], team, role_format)
-        if zoomed:
-            with suppress(WorkmuxError, OSError):
-                tmux.run("if-shell", "-F", "-t", source, "#{!=:#{window_zoomed_flag},1}", f"resize-pane -Z -t {source}")
-        raise
+def _new_managed(tmux: Tmux, window: str, master: str, team: _Managed, profile: str,
+                 widths: tuple[int, int], owned: dict[str, str]) -> None:
+    ids = [master]
+    for width in widths:
+        owner = f"{team.id}.{uuid4().hex}"
+        pane = tmux.run("split-window", "-hdP", "-l", str(width), "-c",
+                        tmux_argument(team.directory.replace("#", "##")), "-t", window + "." + ids[-1],
+                        "-F", "#{pane_id}", "-e", f"{SPAWN}={owner}", *_worker_args(window, owner, "reserve"))
+        ids.append(pane)
+        # This marker survives legitimate park/launch transitions, not a manual
+        # respawn with a different command.
+        owned[pane] = _marker(team.id + ".")
+        _checked(tmux, pane, _all(_eq("window_id", window), _marker(owner), _eq("pane_dead", "0")),
+                 _command(*_stamp(pane, owner, "")))
+    data = json.dumps({"panes": ids, "managed": vars(team)})
+    tmux.run(*_set(window, _OPTION, data, window=True), ";", *_set(window, _MANAGED, team.id, window=True),
+             ";", *_set(window, _ROLE_OPTION, _role_format(ids), window=True))
+    deadline = time.monotonic() + _STOP_TIMEOUT
+    while True:
+        _, panes = _snapshot(tmux, window, team, ids=ids)
+        if all(pane in panes and panes[pane].start for pane in ids[1:]):
+            break
+        if time.monotonic() >= deadline:
+            raise WorkmuxError("Could not establish ownership of both reserved worker panes.")
+        time.sleep(_POLL)
+    _run_generation(tmux, window, ids, team, None, panes, profile)
 
 
 def _clear_managed(tmux: Tmux, window: str, ids: list[str], team: _Managed,

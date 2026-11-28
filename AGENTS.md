@@ -49,8 +49,8 @@
   records, and never fetch or take optional index locks.
 - `workmux/plugins.py`: explicit, safe installation/removal and status reporting
   for bundled agent integrations, including checksum-verified JSON hook files.
-- `workmux/teams.py`: foreground-shell launch of a three-pane Pi team in the
-  current managed window and opt-in managed worker replacement on Linux. Store
+- `workmux/teams.py`: launch a three-pane Pi team in a new tab after the
+  calling tab and support opt-in managed worker replacement on Linux. Store
   role assignments as window metadata keyed by stable pane IDs; clearing
   assignments must not stop any process. `workmux/team_worker.py` is an internal
   Linux pane entry point: record the leader's process incarnation and exec the
@@ -119,6 +119,10 @@
   neither report state nor emit escapes in non-interactive/RPC modes.
 - Pi reload is opt-in and fixed to `/reload`. Recheck readiness in Pi, discard
   expired requests, and require a matching runtime acknowledgment for `Applied`.
+- Create team tabs without modifying the caller's panes or layout. Let tmux
+  handle insertion and renumbering; select the team only after setup. On failure,
+  roll back the new tab only if its remaining panes are still owned. Plain team
+  panes close on exit; managed worker panes must remain available for reset.
 - Managed teams check pane and process ownership before replacing workers. Never
   act on a missing or repurposed pane. Publish the PID pair only after verifying
   both launches in the same committed generation. Pi registers a matching launch

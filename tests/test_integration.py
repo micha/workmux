@@ -338,85 +338,83 @@ class TmuxIntegrationTests(unittest.TestCase):
         executable = directory / "pi"
         report_path = shlex.quote(self.temporary.name) + '/"$TMUX_PANE".pi'
         executable.write_text(f'''#!/bin/sh
-printf '%s\\n' "$PWD" > {report_path}
+printf '%s\\n' "$PWD" "$PATH" > {report_path}
 IFS= read -r input
 ''')
         executable.chmod(0o755)
         return executable
 
-    def test_team_launches_in_place_and_tracks_pane_membership(self):
-        session, master, sidebar = self.workspace()
+    def test_team_inserts_after_calling_tab_and_closes_when_last_pi_exits(self):
+        session, caller, _ = self.workspace()
+        self.tmux.split(caller.id, "down")
+        next_window = self.tmux.pane(self.tmux.new_tab(caller.id, "next")).window
+        self.tmux.run("select-window", "-t", caller.window, ";", "select-pane", "-t", caller.id)
         executable = self.fake_team_pi()
         root = Path(self.temporary.name)
         directory = root / "repo space; ' $literal #{session_name};"
         directory.mkdir()
         border = '#{?#{E:@workmux-team-role},[#{E:@workmux-team-role}],#{pane_title}}'
         self.tmux.run("set-option", "-g", "pane-border-status", "top", ";",
-                      "set-option", "-g", "pane-border-format", border)
-        original = self.tmux.run("display-message", "-p", "-t", master.id, "#{window_id} #{window_name} #{pane_pid}")
+                      "set-option", "-g", "pane-border-format", border, ";",
+                      "set-option", "-gw", "remain-on-exit", "on", ";",
+                      "set-option", "-t", session, "renumber-windows", "off")
         pty_master, _, _ = self.attach(session)
+        fmt = "#{window_id} #{window_layout} #{pane_id} #{pane_pid}"
+        original = self.tmux.run("list-panes", "-t", caller.window, "-F", fmt)
         returned = root / "original-shell-returned"
-        command = (f"cd {shlex.quote(str(directory))} && PATH={shlex.quote(str(executable.parent))}:\"$PATH\" "
-                   f"workmux team new; printf returned > {shlex.quote(str(returned))}\r")
+        suffix = str(root / 'unused $literal "path";')
+        command = (f"cd {shlex.quote(str(directory))} && "
+                   f"PATH={shlex.quote(str(executable.parent))}:\"$PATH\":{shlex.quote(suffix)} "
+                   f"workmux team new; printf '%s' \"$?\" > {shlex.quote(str(returned))}\r")
         os.write(pty_master, command.encode())
 
         def started():
-            reports = list(root.glob("%*.pi"))
-            return len(reports) == 3 and all(report.read_text() == f"{directory}\n" for report in reports)
+            reports = [report.read_text().splitlines() for report in root.glob("%*.pi")]
+            return len(reports) == 3 and all(
+                len(report) == 2 and report[0] == str(directory) and
+                str(executable.parent) in report[1].split(os.pathsep) and report[1].endswith(f":{suffix}")
+                for report in reports
+            )
 
-        eventually(started, "the three panes did not start Pi in the same directory")
-        self.assertFalse(returned.exists())
-        self.assertEqual(self.tmux.run("display-message", "-p", "-t", master.id,
-                                       "#{window_id} #{window_name} #{pane_pid}"), original)
-        self.assertEqual(self.tmux.pane(master.window).id, master.id)
+        eventually(lambda: returned.exists() and returned.read_text(), "calling shell did not resume")
+        self.assertEqual(returned.read_text(), "0", self.tmux.run("capture-pane", "-p", "-t", caller.id))
+        eventually(started, "the three panes did not start Pi with the caller's directory and PATH")
+        self.assertEqual(self.tmux.run("list-panes", "-t", caller.window, "-F", fmt), original)
+        master = self.tmux.pane(session + ":")
+        self.assertNotIn(master.window, (caller.window, next_window))
+        indices = "#{window_index}:#{window_id}"
+        self.assertEqual(self.tmux.run("list-windows", "-t", session, "-F", indices).splitlines(),
+                         [f"0:{caller.window}", f"1:{master.window}", f"2:{next_window}"])
         geometry = self.tmux.run("list-panes", "-t", master.window, "-F",
                                  "#{pane_left} #{pane_width} #{pane_height} #{pane_id}")
         columns = sorted((int(x), int(width), int(height), pane)
                          for x, width, height, pane in (line.split() for line in geometry.splitlines()))
-        _, _, first, second = [column[3] for column in columns]
-        self.assertEqual([column[3] for column in columns[:2]], [sidebar.id, master.id])
+        self.assertEqual(len(columns), 4)
+        sidebar, left, first, second = [column[3] for column in columns]
+        self.assertTrue(self.tmux.pane(sidebar).sidebar)
+        self.assertEqual(left, master.id)
         self.assertTrue(all(column[2] == columns[0][2] for column in columns))
         widths = [column[1] for column in columns[1:]]
         self.assertLessEqual(max(widths) - min(widths), 1)
         data = self.tmux.run("show-options", "-wqv", "-t", master.window, "@workmux-team")
         self.assertEqual(json.loads(data), {"panes": [master.id, first, second]})
-        self.assertEqual(self.tmux.run("show-options", "-wqv", "-t", master.window, "@workmux-team-name"), "")
         status = f"master\t{master.id}\nslave 1\t{first}\nslave 2\t{second}"
-        self.assertEqual(team_status(self.tmux, sidebar.id), status)
-        self.assertEqual(team_status(self.tmux, sidebar.id, as_json=True), 'null')
+        self.assertEqual(team_status(self.tmux, sidebar), status)
+        self.assertEqual(team_status(self.tmux, sidebar, as_json=True), 'null')
+        for pane, role in ((master.id, "master"), (first, "slave 1"), (second, "slave 2")):
+            self.assertEqual(self.tmux.run("display-message", "-p", "-t", pane, "#{E:pane-border-format}"),
+                             f"[{role}]")
 
-        def pane_border(pane):
-            return self.tmux.run("display-message", "-p", "-t", pane, "#{E:pane-border-format}")
-
-        def pane_title(pane):
-            return self.tmux.run("display-message", "-p", "-t", pane, "#{pane_title}")
-
-        self.assertEqual(pane_border(master.id), "[master]")
-        self.assertEqual(pane_border(first), "[slave 1]")
-        self.assertEqual(pane_border(second), "[slave 2]")
-        self.assertEqual(pane_border(sidebar.id), pane_title(sidebar.id))
-
-        # Exiting Pi returns to the same foreground shell; neither slave is stopped.
         self.tmux.run("send-keys", "-t", master.id, "done", "Enter")
-        eventually(returned.exists, "the original shell did not resume")
-        self.assertEqual(team_status(self.tmux, master.id), status)
-        with self.assertRaisesRegex(WorkmuxError, "already has a team"):
-            new_team(self.tmux, master.id)
-        self.tmux.run("swap-pane", "-d", "-s", first, "-t", second)
-        self.assertEqual(team_status(self.tmux, master.id), status)
-        self.assertEqual(pane_border(first), "[slave 1]")
-        self.tmux.run("break-pane", "-d", "-s", second)
-        self.assertEqual(team_status(self.tmux, master.id), status + " (missing)")
-        self.assertEqual(pane_border(second), pane_title(second))
-
-        before = self.tmux.run("list-panes", "-a", "-F", "#{window_id} #{pane_id} #{pane_pid}")
-        self.assertEqual(main(["--socket", self.socket, "team", "clear", "--pane", master.id]), 0)
-        self.assertEqual(self.tmux.run("list-panes", "-a", "-F", "#{window_id} #{pane_id} #{pane_pid}"), before)
-        self.assertEqual(pane_border(first), pane_title(first))
-        self.assertEqual(self.tmux.run("show-options", "-gv", "pane-border-format"), border)
-        self.assertEqual(self.tmux.run("show-options", "-gv", "pane-border-status"), "top")
-        with self.assertRaisesRegex(WorkmuxError, "no team"):
-            team_status(self.tmux, master.id)
+        eventually(lambda: {pane.id for pane in self.tmux.panes(master.window)} == {sidebar, first, second})
+        self.assertEqual(team_status(self.tmux, sidebar), status.replace(master.id, master.id + " (missing)", 1))
+        for pane in (first, second):
+            self.tmux.run("send-keys", "-t", pane, "done", "Enter")
+        eventually(lambda: master.window not in self.tmux.run("list-windows", "-t", session, "-F", "#{window_id}"))
+        self.assertEqual(self.tmux.run("list-windows", "-t", session, "-F", indices).splitlines(),
+                         [f"0:{caller.window}", f"2:{next_window}"])
+        self.assertEqual(self.tmux.run("show-options", "-gwv", "remain-on-exit"), "on")
+        self.assertEqual(self.tmux.run("list-panes", "-t", caller.window, "-F", fmt), original)
 
     def test_team_refresh_publishes_roles_and_removes_the_legacy_name(self):
         _, master, _ = self.workspace()
@@ -432,42 +430,70 @@ IFS= read -r input
         self.assertEqual(self.tmux.run("display-message", "-p", "-t", second, pane_format), ":slave 2")
         self.assertEqual(self.tmux.run("list-panes", "-t", master.window, "-F", "#{pane_id} #{pane_pid}"), before)
         self.assertEqual(team_status(self.tmux, master.id), f"master\t{master.id}\nslave 1\t{first}\nslave 2\t{second}")
+        self.assertEqual(main(["--socket", self.socket, "team", "clear", "--pane", master.id]), 0)
+        self.assertEqual(self.tmux.run("list-panes", "-t", master.window, "-F", "#{pane_id} #{pane_pid}"), before)
+        self.assertEqual(self.tmux.run("display-message", "-p", "-t", second, pane_format), ":")
 
-    def test_team_preflight_rejects_noninteractive_or_split_windows(self):
-        _, master, _ = self.workspace()
-        original = self.tmux.run("display-message", "-p", "-t", master.id, "#{window_layout}")
-        with patch("workmux.teams.os.ttyname", return_value="not the pane tty"):
-            with self.assertRaisesRegex(WorkmuxError, "foreground shell"):
-                new_team(self.tmux, master.id)
-        with patch("workmux.teams._require_foreground"), patch("workmux.teams.shutil.which", return_value=None):
+    def test_team_preflight_rejects_missing_pi_and_unmanaged_session(self):
+        session, caller, _ = self.workspace()
+        _, native = self.native_session()
+        with self.assertRaisesRegex(WorkmuxError, "not a workmux workspace"):
+            new_team(self.tmux, native)
+        with patch("workmux.teams.shutil.which", return_value=None):
             with self.assertRaisesRegex(WorkmuxError, "pi was not found"):
-                new_team(self.tmux, master.id)
-        self.assertEqual(self.tmux.run("display-message", "-p", "-t", master.id, "#{window_layout}"), original)
+                new_team(self.tmux, caller.id)
+        self.assertEqual(self.tmux.run("list-windows", "-t", session, "-F", "#{window_id}"), caller.window)
 
-        self.tmux.split(master.id, "down")
-        split = self.tmux.run("display-message", "-p", "-t", master.id, "#{window_layout}")
-        with self.assertRaisesRegex(WorkmuxError, "exactly one live content pane"):
-            new_team(self.tmux, master.id)
-        self.assertEqual(self.tmux.run("display-message", "-p", "-t", master.id, "#{window_layout}"), split)
-        with self.assertRaisesRegex(WorkmuxError, "no team"):
-            team_status(self.tmux, master.id)
+    def test_team_rolls_back_on_launch_failure_without_touching_caller(self):
+        from workmux import teams
 
-    def test_team_rolls_back_if_master_pi_cannot_start(self):
-        _, master, sidebar = self.workspace()
+        session, caller, _ = self.workspace()
         executable = self.fake_team_pi()
-        self.tmux.run("resize-pane", "-Z", "-t", master.id)
-        original = self.tmux.run("display-message", "-p", "-t", master.id, "#{window_layout}")
-        with (patch("workmux.teams._require_foreground"), patch("workmux.teams.shutil.which", return_value=str(executable)),
-              patch("workmux.teams.os.execv", side_effect=OSError("launch failed"))):
-            with self.assertRaisesRegex(OSError, "launch failed"):
-                new_team(self.tmux, master.id)
-        self.assertEqual({pane.id for pane in self.tmux.panes(master.window)}, {master.id, sidebar.id})
-        self.assertEqual(self.tmux.run("display-message", "-p", "-t", master.id, "#{window_layout}"), original)
-        self.assertTrue(self.tmux.pane(master.id).zoomed)
-        self.assertEqual(self.tmux.run("display-message", "-p", "-t", master.id,
-                                       "#{E:@workmux-team-role}"), "")
-        with self.assertRaisesRegex(WorkmuxError, "no team"):
-            team_status(self.tmux, master.id)
+        self.tmux.run("resize-pane", "-Z", "-t", caller.id)
+        fmt = "#{window_layout} #{window_visible_layout} #{window_zoomed_flag} #{pane_id} #{pane_pid}"
+        before = self.tmux.run("list-panes", "-t", caller.window, "-F", fmt)
+        start = teams._checked
+        launches = []
+
+        def fail_second_launch(tmux, target, guard, action):
+            if '"respawn-pane"' in action:
+                self.assertEqual(tmux.pane(session + ":").id, caller.id)
+                if launches:
+                    raise WorkmuxError("test launch failure")
+                launches.append(target)
+            return start(tmux, target, guard, action)
+
+        with (patch("workmux.teams.shutil.which", return_value=str(executable)),
+              patch.object(teams, "_checked", side_effect=fail_second_launch)):
+            with self.assertRaisesRegex(WorkmuxError, "test launch failure"):
+                new_team(self.tmux, caller.id)
+        self.assertEqual(len(launches), 1)
+        self.assertEqual(self.tmux.run("list-windows", "-t", session, "-F", "#{window_id}"), caller.window)
+        self.assertEqual(self.tmux.run("list-panes", "-t", caller.window, "-F", fmt), before)
+        self.assertEqual(self.tmux.pane(session + ":").id, caller.id)
+
+    def test_team_rollback_preserves_foreign_content(self):
+        from workmux import teams
+
+        session, caller, _ = self.workspace()
+        executable = self.fake_team_pi()
+        start = teams._checked
+        foreign = None
+
+        def repurpose_before_launch(tmux, target, guard, action):
+            nonlocal foreign
+            if '"respawn-pane"' in action:
+                tmux.run("respawn-pane", "-t", target, sys.executable, "-c", "import signal; signal.pause()")
+                foreign = tmux.run("display-message", "-p", "-t", target, "#{pane_id}")
+            return start(tmux, target, guard, action)
+
+        with (patch("workmux.teams.shutil.which", return_value=str(executable)),
+              patch.object(teams, "_checked", side_effect=repurpose_before_launch)):
+            with self.assertRaisesRegex(WorkmuxError, "changed during the operation"):
+                new_team(self.tmux, caller.id)
+        self.assertIsNotNone(foreign)
+        self.assertEqual(self.tmux.run("display-message", "-p", "-t", foreign, "#{pane_dead}"), "0")
+        self.assertEqual(self.tmux.pane(session + ":").id, caller.id)
 
     def managed_team(self, initial="design", returns=False):
         if sys.platform != "linux" or not hasattr(os, "pidfd_open"):
@@ -522,25 +548,28 @@ if profile == 'partial' and role == 'slave 2':
 raise SystemExit(subprocess.call([sys.executable, {str(pi)!r}, profile]))
 ''')
         launcher.chmod(0o755)
-        session, master, sidebar = self.workspace()
-        shell = self.tmux.run('display-message', '-p', '-t', master.id, '#{pane_pid}')
+        session, caller, sidebar = self.workspace()
+        shell = self.tmux.run('display-message', '-p', '-t', caller.id, '#{pane_pid}')
         pty_master, _, _ = self.attach(session)
         returned = root / 'shell-returned'
         command = (f"cd {shlex.quote(str(directory))} && PATH={shlex.quote(str(executable.parent))}:\"$PATH\" "
                    f"workmux team new --launcher {shlex.quote(str(launcher))} --profile {shlex.quote(initial)}; "
                    f"printf '%s' \"$?\" > {shlex.quote(str(returned))}\r")
         os.write(pty_master, command.encode())
+        eventually(lambda: returned.exists() and returned.read_text(), 'managed creation did not return to the shell',
+                   timeout=15)
+        output = self.tmux.run('capture-pane', '-p', '-t', caller.id)
         if returns:
-            eventually(lambda: returned.exists() and returned.read_text(), 'managed creation did not return to the shell')
             self.assertEqual(returned.read_text(), '1')
-            self.assertIn('Worker startup failed', self.tmux.run('capture-pane', '-p', '-t', master.id))
-            return master, sidebar, shell
-        try:
-            eventually((root / 'master-pi').exists, 'master did not start after both workers registered')
-        except AssertionError as error:
-            raise AssertionError(self.tmux.run('capture-pane', '-p', '-t', master.id)) from error
+            self.assertIn('Worker startup failed', output)
+            return caller, sidebar, shell
+        self.assertEqual(returned.read_text(), '0', output)
+        master = self.tmux.pane(session + ':')
+        self.assertNotEqual(master.window, caller.window)
+        self.assertEqual(self.tmux.run('display-message', '-p', '-t', caller.id, '#{pane_pid}'), shell)
+        eventually((root / 'master-pi').exists, 'master did not start after both workers registered')
         metadata = json.loads(self.tmux.run('show-options', '-wqv', '-t', master.window, '@workmux-team'))
-        self.assertNotIn('name', metadata)
+        self.assertEqual(metadata['panes'][0], master.id)
         return master, pty_master, metadata['panes'][1:], directory
 
     def team_cli(self, pane, *args, asynchronous=False):
@@ -550,9 +579,12 @@ raise SystemExit(subprocess.call([sys.executable, {str(pi)!r}, profile]))
         command = ['workmux', 'team', *args]
         return subprocess.Popen(command, **options) if asynchronous else subprocess.run(command, timeout=15, **options)
 
-    def test_managed_worker_reset_preserves_layout_focus_and_master(self):
+    def test_managed_worker_reset_preserves_layout_focus_and_master_after_reordering(self):
         master, terminal, workers, directory = self.managed_team()
         root = Path(self.temporary.name)
+        self.tmux.run('swap-window', '-d', '-s', master.window, '-t', master.session + ':0')
+        self.tmux.run('move-window', '-d', '-s', master.window, '-t', master.session + ':9')
+        self.tmux.run('select-window', '-t', master.session + ':' + master.window)
         original = json.loads(self.team_cli(master.id, 'status', '--json').stdout)
         leaders = [int(self.tmux.run('display-message', '-p', '-t', pane, '#{pane_pid}')) for pane in workers]
         master_pid = int((root / 'master-pi').read_text())
@@ -587,13 +619,37 @@ raise SystemExit(subprocess.call([sys.executable, {str(pi)!r}, profile]))
                          [['slave 1', [';'], str(directory)], ['slave 2', [';'], str(directory)]])
         self.assertTrue(all(record[3] not in new.values() for record in records))
 
-    def test_managed_setup_failure_leaves_original_shell(self):
-        master, sidebar, shell = self.managed_team(initial='partial', returns=True)
-        self.assertEqual({pane.id for pane in self.tmux.panes(master.window)}, {master.id, sidebar.id})
-        self.assertEqual(self.tmux.run('display-message', '-p', '-t', master.id, '#{pane_pid}'), shell)
+    def test_managed_setup_failure_closes_new_tab_and_leaves_original_shell(self):
+        caller, sidebar, shell = self.managed_team(initial='partial', returns=True)
+        self.assertEqual(self.tmux.run('list-windows', '-t', caller.session, '-F', '#{window_id}'), caller.window)
+        self.assertEqual({pane.id for pane in self.tmux.panes(caller.window)}, {caller.id, sidebar.id})
+        self.assertEqual(self.tmux.pane(caller.session + ':').id, caller.id)
+        self.assertEqual(self.tmux.run('display-message', '-p', '-t', caller.id, '#{pane_pid}'), shell)
         self.assertFalse((Path(self.temporary.name) / 'master-pi').exists())
         with self.assertRaisesRegex(WorkmuxError, 'no team'):
-            team_status(self.tmux, master.id)
+            team_status(self.tmux, caller.id)
+
+    def test_managed_worker_exit_keeps_slot_and_closing_tab_ends_team(self):
+        master, _, workers, _ = self.managed_team()
+        pair = json.loads(team_status(self.tmux, master.id, as_json=True))
+        leader = int(self.tmux.run('display-message', '-p', '-t', workers[1], '#{pane_pid}'))
+        exiting = os.pidfd_open(pair['slave 1'])
+        live = os.pidfd_open(pair['slave 2'])
+        live_leader = os.pidfd_open(leader)
+        try:
+            signal.pidfd_send_signal(exiting, signal.SIGTERM)
+            eventually(lambda: self.tmux.run('display-message', '-p', '-t', workers[0], '#{pane_dead}') == '1')
+            self.assertIsNone(json.loads(team_status(self.tmux, master.id, as_json=True)))
+            self.tmux.run('send-keys', '-t', master.id, 'C-d')
+            eventually(lambda: master.id not in {pane.id for pane in self.tmux.panes(master.window)})
+            self.assertEqual(select.select([live], [], [], 0)[0], [])
+            self.tmux.run('kill-window', '-t', master.window)
+            for fd in (live, live_leader):
+                self.assertEqual(select.select([fd], [], [], 5)[0], [fd])
+            self.assertEqual(len(self.tmux.run('list-windows', '-t', master.session).splitlines()), 1)
+        finally:
+            for fd in (exiting, live, live_leader):
+                os.close(fd)
 
     def test_managed_partial_startup_closes_registration_and_allows_retry(self):
         master, _, workers, _ = self.managed_team()

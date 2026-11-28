@@ -21,8 +21,8 @@ allowed directories. This is a workflow guardrail, not a security boundary.
 - **Workmux** owns opted-in worker launches and resets, not the design or
   implementation workflow. Keep the sidebar, master process, pane IDs, and
   layout intact. Refuse to overwrite a missing, moved, or repurposed worker
-  pane. Use an explicit opt-in at `team new` in the current tab for the first
-  version; don't adopt existing teams or require a dedicated new tab.
+  pane. Use an explicit opt-in at `team new` when creating a dedicated tab;
+  don't adopt existing teams.
 - **The launcher** is a trusted, user-selected executable, not a language for
   configuring Bubblewrap. Save the initial absolute checkout directory at team
   creation, use it for every launch, and pass the profile as one argument, the
@@ -60,11 +60,11 @@ workmux team status --json
 
 - `team new`: `--launcher` opts in and requires an initial `--profile`. Save
   the resolved executable and reuse it with each selected profile as its first
-  argument (`launch-worker design`, not a shell-parsed command string). Keep
-  the existing foreground-shell requirement. Wait for both workers to register
-  before replacing that job with the master Pi. On setup failure keep the
-  original shell and roll back only still-owned panes created by that call.
-  Plain `team new` starts an unmanaged team.
+  argument (`launch-worker design`, not a shell-parsed command string). Insert
+  a detached tab after the calling tab. Wait for both workers to register
+  before launching the master Pi and selecting the new tab. On setup failure,
+  leave the caller intact and remove the new tab only if its remaining panes
+  are still owned. Plain `team new` starts an unmanaged team.
 - `team reset`: the master invokes this through Pi's `bash` tool. Resolve the
   original master pane via `TMUX` and `TMUX_PANE`; don't require the calling
   subprocess to be in the foreground, and don't send terminal input. Reuse
@@ -84,9 +84,9 @@ failure. Workmux doesn't capture or parse the pane's terminal output.
 
 ## Reset protocol
 
-1. Resolve the opted-in team from the master's stable pane ID. Unlike initial
-   `team new`, reset must work from a subprocess of the master Pi with stdout
-   captured; don't require the invoking job to own the pane's foreground TTY.
+1. Resolve the opted-in team from the master's stable pane ID. Reset must work
+   from a subprocess of the master Pi with stdout captured; don't require the
+   invoking job to own the pane's foreground TTY.
    Serialize mutations for this team (server and team incarnation) with a
    crash-released lock, such as a private file lock. Keep enough transition
    state to recognize an interrupted reset. A bare tmux `wait-for -L` lock is
@@ -115,9 +115,9 @@ failure. Workmux doesn't capture or parse the pane's terminal output.
    live process identities, and registrations for this reset. Return a
    machine-readable role-to-PID pair on the **reset command's** stdout, not the
    launcher's. Status also exposes a pair only after its generation is
-   committed. On timeout or a one-worker failure, report per-worker
-   diagnostics, close the pending launch IDs to late registrations, and leave
-   owned panes available for inspection and an explicit retry. After an
+   committed. On timeout or a one-worker failure during reset, report
+   per-worker diagnostics, close the pending launch IDs to late registrations,
+   and leave owned panes available for inspection and an explicit retry. After an
    interruption, recognize the pending transition; retry only if ownership
    and teardown can still be verified, and otherwise refuse. Don't silently
    restart the old phase, recreate missing panes, or kill a pane whose
@@ -141,11 +141,12 @@ failure. Workmux doesn't capture or parse the pane's terminal output.
   dependencies. No sidebar team entry, automatic restart, or phase engine.
 - Extend the Node tests for `workmux/resources/pi-notify.ts`: startup-only
   registration, expected ID guard, and unchanged notification/activity/reload
-  behavior. Extend private tmux integration and completion tests: unchanged
-  unmanaged path; literal launcher arguments and checkout paths; successful
-  in-place reset; partial startup and retry; stale registration; concurrent
-  reset; interrupted reset with no usable pair; and refusal to overwrite a
-  manually repurposed pane. Check pane IDs, layout, focus, zoom, and master PID.
+  behavior. Extend private tmux integration and completion tests: dedicated tab
+  insertion, rollback and teardown; literal launcher arguments and checkout
+  paths; successful in-place reset after reordering; partial startup and retry;
+  stale registration; concurrent reset; interrupted reset with no usable pair;
+  and refusal to overwrite a manually repurposed pane. Check pane IDs, layout,
+  focus, zoom, and master PID.
 - Use disposable sockets and harness directories, with no model calls or
   installation in a user's real profile. Run `scripts/check.sh`, the isolated
   `scripts/check-install.sh` with pipx, and `git diff --check`. The feasibility

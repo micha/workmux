@@ -244,6 +244,18 @@ class InputTests(unittest.TestCase):
             self.assertIn("server for the master pane has changed", stderr.getvalue())
             reset.assert_not_called()
 
+    def test_team_new_rejects_another_server_or_stale_pane_context(self):
+        with patch.dict(os.environ, {"TMUX": "/tmp/current,1234,0", "TMUX_PANE": "%3"}, clear=True), \
+                patch("workmux.cli.Tmux") as tmux, patch("workmux.teams.new_team") as new, \
+                patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            self.assertEqual(main(["--server", "other", "team", "new"]), 1)
+            self.assertIn("Omit --server and --socket", stderr.getvalue())
+            tmux.assert_not_called()
+            tmux.return_value.run.return_value = "5678"
+            self.assertEqual(main(["team", "new"]), 1)
+            self.assertIn("server for a workmux pane has changed", stderr.getvalue())
+            new.assert_not_called()
+
     def test_team_new_rejects_a_team_name(self):
         with patch("workmux.cli.Tmux") as tmux, patch("sys.stderr", new_callable=io.StringIO) as stderr:
             with self.assertRaises(SystemExit) as error:

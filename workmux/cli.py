@@ -74,7 +74,7 @@ def parser() -> argparse.ArgumentParser:
 
     team = commands.add_parser("team", help="Launch and manage a three-pane Pi team")
     teams = team.add_subparsers(dest="action", required=True)
-    new_team = teams.add_parser("new", help="Start a team in the current window from its foreground shell")
+    new_team = teams.add_parser("new", help="Start a team in a new tab after the calling tab")
     new_team.add_argument(
         "--launcher", help="Worker launcher executable for managed teams on Linux (requires --profile)",
     ).completer = completion.executables
@@ -208,18 +208,21 @@ def main(argv: list[str] | None = None) -> int:
         current_tmux = os.environ.get("TMUX", "").rsplit(",", 2)
         current_socket = current_tmux[0]
         socket = tmux_socket(args.server, args.socket)
-        if args.command == "team" and args.action == "reset":
+        if args.command == "team" and args.action in ("new", "reset"):
+            if args.action == "new" and (args.launcher is None) != (args.profile is None):
+                raise WorkmuxError("Pass --launcher and --profile together to start a managed team.")
+            origin = "the master pane" if args.action == "reset" else "a workmux pane"
             source = os.environ.get("TMUX_PANE", "")
             if (len(current_tmux) != 3 or not os.path.isabs(current_socket) or
                     not all(re.fullmatch(r"[0-9]+", field) for field in current_tmux[1:]) or
                     not re.fullmatch(r"%[0-9]+", source)):
-                raise WorkmuxError("Run team reset from the master pane with TMUX and TMUX_PANE set.")
+                raise WorkmuxError(f"Run team {args.action} from {origin} with TMUX and TMUX_PANE set.")
             if args.server or (args.socket is not None and
                                os.path.realpath(args.socket) != os.path.realpath(current_socket)):
-                raise WorkmuxError("Team reset uses the master pane's tmux server. Omit --server and --socket.")
+                raise WorkmuxError(f"Team {args.action} uses {origin}'s tmux server. Omit --server and --socket.")
             tmux = Tmux(socket=current_socket, start_server=False)
             if tmux.run("display-message", "-p", "-t", source, "#{pid}") != current_tmux[1]:
-                raise WorkmuxError("The tmux server for the master pane has changed. Run team reset from the current master pane.")
+                raise WorkmuxError(f"The tmux server for {origin} has changed. Run team {args.action} from {origin}.")
         else:
             tmux = Tmux(server=args.server or "workmux", socket=socket)
         if args.command == "enable":
@@ -282,9 +285,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "team":
             from .teams import clear_team, new_team, refresh_team, reset_team, team_status
             if args.action == "new":
-                if (args.launcher is None) != (args.profile is None):
-                    raise WorkmuxError("Pass --launcher and --profile together to start a managed team.")
-                new_team(tmux, os.environ.get("TMUX_PANE"), launcher=args.launcher, profile=args.profile)
+                new_team(tmux, source, launcher=args.launcher, profile=args.profile)
             elif args.action == "reset":
                 print(reset_team(tmux, source, args.profile))
             elif args.action == "status":
